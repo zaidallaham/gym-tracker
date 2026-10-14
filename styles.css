@@ -160,7 +160,7 @@ body {
   font: 16px/1.45 var(--font);
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
-  min-height: 100dvh;
+  min-height: calc(100dvh / var(--zoom, 1));
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; border: 0; background: none; padding: 0; touch-action: manipulation; }
@@ -430,7 +430,7 @@ textarea.input { min-height: 96px; resize: vertical; }
 .ex-meta { min-width: 0; flex: 1; }
 .lib-list { padding: 0 12px; }
 .fab {
-  position: fixed; right: 16px; bottom: calc(var(--nav-h) + var(--safe-b) + 16px); z-index: 25;
+  position: fixed; right: max(16px, calc(50% - 324px)); bottom: calc(var(--nav-h) + var(--safe-b) + 16px); z-index: 25;
   height: 56px; padding: 0 20px 0 16px; border-radius: 28px;
   display: inline-flex; align-items: center; gap: 8px;
   background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 15.5px;
@@ -695,7 +695,7 @@ body.resting .sticky-cta, body.resting .fab { bottom: calc(var(--nav-h) + var(--
 .scrim.open { opacity: 1; }
 .sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 61;
-  max-width: 680px; margin: 0 auto; max-height: 90dvh; overflow-y: auto; overscroll-behavior: contain;
+  max-width: 680px; margin: 0 auto; max-height: calc(90dvh / var(--zoom, 1)); overflow-y: auto; overscroll-behavior: contain;
   padding: 8px 16px calc(18px + var(--safe-b));
   background: var(--surface); border-radius: 22px 22px 0 0;
   transform: translateY(100%); transition: transform .24s cubic-bezier(.2, .8, .2, 1);
@@ -756,7 +756,4 @@ body.resting .toast-wrap { bottom: calc(var(--nav-h) + var(--safe-b) + 92px); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
-}
-@media (min-width: 700px) {
-  .fab { right: calc(50% - 324px); }
 }

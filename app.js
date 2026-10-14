@@ -675,7 +675,7 @@ function lineChart(host, { series, height = 190, yFmt = v => fmtNum(v), tip, hov
     if (!w) return;
     const cs = getComputedStyle(host);
     const col = n => cs.getPropertyValue(n).trim();
-    const dpr = devicePixelRatio || 1;
+    const dpr = (devicePixelRatio || 1) * (window.UI_ZOOM || 1);
     cv.width = Math.round(w * dpr); cv.height = Math.round(height * dpr);
     cv.style.height = height + 'px';
     const g = cv.getContext('2d');
@@ -737,7 +737,7 @@ function lineChart(host, { series, height = 190, yFmt = v => fmtNum(v), tip, hov
   };
   const pick = ev => {
     if (!geo || !target.length) return;
-    const mx = ev.clientX - cv.getBoundingClientRect().left;
+    const mx = (ev.clientX - cv.getBoundingClientRect().left) / (window.UI_ZOOM || 1);
     let best = 0;
     target.forEach((p, i) => { if (Math.abs(geo.X(p.x) - mx) < Math.abs(geo.X(target[best].x) - mx)) best = i; });
     if (best !== hover) { hover = best; draw(); }
@@ -765,30 +765,34 @@ function dragReorder(list, onDrop) {
     const handle = e.target.closest('.drag-handle');
     if (!handle) return;
     e.preventDefault();
+    // Measure everything in client (screen) pixels from the starting layout; only the CSS
+    // transforms are divided by the UI zoom (see the desktop-site fix in index.html).
+    const z = window.UI_ZOOM || 1;
     const items = [...list.children];
     const item = handle.closest('[data-i]');
     const from = items.indexOf(item);
-    const tops = items.map(el => el.getBoundingClientRect().top + scrollY);
-    const slot = items[from + 1] ? tops[from + 1] - tops[from] : items[from - 1] ? tops[from] - tops[from - 1] : item.offsetHeight;
-    const startY = e.clientY + scrollY;
+    const rects = items.map(el => el.getBoundingClientRect());
+    const slot = rects[from + 1] ? rects[from + 1].top - rects[from].top : rects[from - 1] ? rects[from].top - rects[from - 1].top : rects[from].height;
+    const listTop = list.getBoundingClientRect().top, startY = e.clientY;
     let to = from, lastY = e.clientY, raf = 0;
     item.classList.add('dragging');
     items.forEach(el => el !== item && el.classList.add('shifting'));
     handle.setPointerCapture(e.pointerId);
     const update = () => {
-      const dy = lastY + scrollY - startY;
-      item.style.transform = `translateY(${dy}px)`;
-      const center = tops[from] + item.offsetHeight / 2 + dy;
+      const scrolled = list.getBoundingClientRect().top - listTop;
+      const dy = lastY - startY - scrolled;
+      item.style.transform = `translateY(${dy / z}px)`;
+      const center = rects[from].top + rects[from].height / 2 + dy;
       to = from;
-      items.forEach((el, i) => {
-        const mid = tops[i] + el.offsetHeight / 2;
+      rects.forEach((r, i) => {
+        const mid = r.top + r.height / 2;
         if (i < from && center < mid) to = Math.min(to, i);
         if (i > from && center > mid) to = Math.max(to, i);
       });
       items.forEach((el, i) => {
         if (el === item) return;
         const shift = from < to && i > from && i <= to ? -slot : to < from && i >= to && i < from ? slot : 0;
-        el.style.transform = shift ? `translateY(${shift}px)` : '';
+        el.style.transform = shift ? `translateY(${shift / z}px)` : '';
       });
     };
     const autoScroll = () => {
