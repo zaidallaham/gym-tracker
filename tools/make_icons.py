@@ -1,4 +1,4 @@
-"""Draw the dumbbell app icons into icons/.   python tools/make_icons.py"""
+"""Draw the dumbbell app icons into public/icons/.   python tools/make_icons.py"""
 import os
 
 from PIL import Image, ImageDraw
@@ -47,7 +47,7 @@ def save(img, out, size):
 
 
 def main():
-    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'icons')
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'public', 'icons')
     os.makedirs(root, exist_ok=True)
 
     # "any" icon: rounded square with transparent corners, mark fills most of it.

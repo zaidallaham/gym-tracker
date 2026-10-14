@@ -30,7 +30,7 @@ const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const throttle = (fn, ms) => { let last = 0, t; return () => { clearTimeout(t); const now = Date.now(); if (now - last >= ms) { last = now; fn(); } else t = setTimeout(() => { last = Date.now(); fn(); }, ms); }; };
 const fmtMB = b => `${fmtNum(b / 1048576, b > 1048576 * 10 ? 0 : 1)} MB`;
-const debounce = (fn, ms) => { let t; const d = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; d.flush = () => { clearTimeout(t); fn(); }; return d; };
+const debounce = (fn, ms) => { let t; const d = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; d.flush = () => { clearTimeout(t); return fn(); }; return d; };
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 /** Epley one-rep-max estimate. A single is taken at face value. */
 const epley = (kg, reps) => reps <= 1 ? kg : kg * (1 + reps / 30);
@@ -147,15 +147,27 @@ const ICONS = {
   calendar: '<path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 10h16M9 3v4M15 3v4"/>',
   offline: '<path d="M12 4v10M8 10l4 4 4-4M5 17v1a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1"/>',
   phone: '<path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM11 18h2"/>',
+  cloudOff: '<path d="M3 3l18 18M8.5 6.4A6 6 0 0 1 18 9.5a4 4 0 0 1 2.4 7.1M17 18H7a4.5 4.5 0 0 1-1.6-8.7"/>',
+  copy: '<path d="M9 9h10v12H9zM5 15V3h10"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/>',
+  key: '<path d="M14.5 9.5a4 4 0 1 1-7.9.9 4 4 0 0 1 7.9-.9zM13.6 12.4L21 19.8M17.5 16.3l2-2"/>',
+  logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/>',
+  user: '<path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 20a7.5 7.5 0 0 1 15 0"/>',
+  cloud: '<path d="M7 18.5a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.5 4.5 0 0 1-.5 9z"/>',
 };
 const icon = (n, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
 
 // ============================================================ 3. storage (IndexedDB, tiny wrapper)
-const STORES = { settings: 'key', templates: 'id', sessions: 'id', bodyweight: 'date', custom: 'id' };
+// The phone keeps a full copy of the signed-in user's data, so the app works offline.
+// Every write to a synced store also lands in `outbox` (same transaction); the sync engine
+// pushes the outbox to D1 and pulls other devices' changes back.
+const SYNCED = { sessions: ['session', 'id'], templates: ['template', 'id'], bodyweight: ['bodyweight', 'date'], custom: ['custom', 'id'], settings: ['settings', 'key'] };
+const KIND_STORE = Object.fromEntries(Object.entries(SYNCED).map(([store, [kind]]) => [kind, store]));
+const STORES = { settings: 'key', templates: 'id', sessions: 'id', bodyweight: 'date', custom: 'id', outbox: 'key', meta: 'key' };
 let dbPromise;
 function idb() {
   return dbPromise ||= new Promise((res, rej) => {
-    const r = indexedDB.open('gym-tracker', 1);
+    const r = indexedDB.open('gym-tracker', 2);
     r.onupgradeneeded = () => {
       for (const [name, keyPath] of Object.entries(STORES)) {
         if (!r.result.objectStoreNames.contains(name)) r.result.createObjectStore(name, { keyPath });
@@ -166,26 +178,53 @@ function idb() {
   });
 }
 const txDone = tx => new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onerror = tx.onabort = () => rej(tx.error); });
+const reqDone = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 const db = {
-  async all(store) {
-    const tx = (await idb()).transaction(store);
-    const r = tx.objectStore(store).getAll();
-    return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
-  },
-  async put(store, value) { const tx = (await idb()).transaction(store, 'readwrite'); tx.objectStore(store).put(value); return txDone(tx); },
-  async del(store, key) { const tx = (await idb()).transaction(store, 'readwrite'); tx.objectStore(store).delete(key); return txDone(tx); },
-  /** Replace every store in one transaction (import / erase). */
-  async replaceAll(data) {
-    const names = Object.keys(STORES);
-    const tx = (await idb()).transaction(names, 'readwrite');
-    for (const n of names) {
-      const os = tx.objectStore(n);
-      os.clear();
-      for (const v of data[n] || []) os.put(v);
+  async all(store) { return reqDone((await idb()).transaction(store).objectStore(store).getAll()); },
+  async get(store, key) { return reqDone((await idb()).transaction(store).objectStore(store).get(key)); },
+  async count(store) { return reqDone((await idb()).transaction(store).objectStore(store).count()); },
+  /**
+   * ops: [{store, value} | {store, key, del: true}] in one transaction.
+   * sync (default true) queues each change for the cloud; updatedAt overrides the change time
+   * (1 = "older than anything", used for defaults so a real copy in the cloud always wins).
+   */
+  async write(ops, { sync = true, updatedAt } = {}) {
+    if (!ops.length) return;
+    const queue = sync && ops.some(o => SYNCED[o.store]);
+    const tx = (await idb()).transaction([...new Set([...ops.map(o => o.store), ...(queue ? ['outbox'] : [])])], 'readwrite');
+    const when = updatedAt ?? Date.now();
+    for (const o of ops) {
+      const os = tx.objectStore(o.store);
+      if (o.del) os.delete(o.key); else os.put(o.value);
+      if (queue && SYNCED[o.store]) {
+        const id = String(o.del ? o.key : o.value[SYNCED[o.store][1]]);
+        tx.objectStore('outbox').put({ key: `${o.store}|${id}`, store: o.store, id, deleted: !!o.del, data: o.del ? null : o.value, updatedAt: when });
+      }
     }
-    return txDone(tx);
+    await txDone(tx);
+    if (queue) onLocalChange();
+  },
+  put(store, value, opts) { return db.write([{ store, value }], opts); },
+  del(store, key, opts) { return db.write([{ store, key, del: true }], opts); },
+  /** Make the synced stores match `data` (import / erase) as ordinary changes, so the cloud follows. */
+  async replaceAll(data) {
+    const ops = [];
+    for (const [store, [, key]] of Object.entries(SYNCED)) {
+      const next = data[store] || [], keep = new Set(next.map(v => String(v[key])));
+      for (const v of await db.all(store)) if (!keep.has(String(v[key]))) ops.push({ store, key: v[key], del: true });
+      for (const v of next) ops.push({ store, value: v });
+    }
+    await db.write(ops);
+  },
+  /** Forget everything on this device (sign-out). */
+  async wipe() {
+    const tx = (await idb()).transaction(Object.keys(STORES), 'readwrite');
+    for (const n of Object.keys(STORES)) tx.objectStore(n).clear();
+    await txDone(tx);
   },
 };
+const metaGet = async key => (await db.get('meta', key))?.value;
+const metaSet = (key, value) => db.write([{ store: 'meta', value: { key, value } }], { sync: false });
 
 // ============================================================ 4. state & domain logic
 const S = {
@@ -199,6 +238,8 @@ const S = {
   settings: { ...DEFAULT_SETTINGS },
   active: null,
   rev: 0,            // bumped whenever finished-session data changes (memo key)
+  auth: null,        // signed-in user {id, username, name, isAdmin, mustChange}
+  locked: false,     // a sign-in screen is showing instead of the app
 };
 
 function indexExercises() {
@@ -228,8 +269,9 @@ function makeTemplate(t, order) {
 /** Persist a session soon (inputs fire on every keystroke). Flushed when the app is hidden. */
 const pendingSaves = new Map();
 const flushSaves = debounce(() => {
-  for (const s of pendingSaves.values()) db.put('sessions', s).catch(err => console.error(err));
+  const saving = [...pendingSaves.values()].map(s => db.put('sessions', s).catch(err => console.error(err)));
   pendingSaves.clear();
+  return Promise.all(saving);
 }, 300);
 function touchSession(s) {
   if (s.end) S.rev++;
@@ -387,7 +429,8 @@ const go = h => { location.hash = h; };
 const replaceRoute = h => { replacing = true; location.replace(h); };
 const goBack = fallback => (navStack.length > 1 ? history.back() : replaceRoute(fallback || '#/'));
 
-function renderRoute() {
+/** Tear down the current view: its timers, listeners, actions and any open sheet. */
+function resetView() {
   renderToken++;
   leaveFns.forEach(f => { try { f(); } catch (e) { console.error(e); } });
   leaveFns = [];
@@ -395,6 +438,11 @@ function renderRoute() {
   viewAC = new AbortController();
   A = {};
   closeSheetNow();
+}
+function renderRoute() {
+  if (!S.auth || S.locked) return;
+  resetView();
+  document.body.classList.remove('auth-mode');
   const { path, q } = parseHash();
   let matched = false;
   for (const [re, fn] of ROUTES) {
@@ -403,7 +451,7 @@ function renderRoute() {
   }
   if (!matched) notFound();
   const tab = /^\/(library|ex|custom)/.test(path) ? 'library' : /^\/progress/.test(path) ? 'progress'
-    : /^\/(history|session)/.test(path) ? 'history' : /^\/(settings|about)/.test(path) ? 'more' : 'train';
+    : /^\/(history|session)/.test(path) ? 'history' : /^\/(settings|about|admin)/.test(path) ? 'more' : 'train';
   for (const a of $$('.tabbar a')) {
     a.classList.toggle('on', a.dataset.tab === tab);
     a.toggleAttribute('aria-current', a.dataset.tab === tab);
@@ -412,8 +460,10 @@ function renderRoute() {
   trainTab.href = S.active ? '#/log' : '#/';
   trainTab.querySelector('.live-dot')?.remove();
   if (S.active) trainTab.insertAdjacentHTML('beforeend', '<span class="live-dot" aria-label="Workout in progress"></span>');
+  paintSync();
 }
 function render() {
+  if (!S.auth || S.locked) return;
   const hash = location.hash || '#/';
   let back = false;
   if (curHash !== null) scrollMem[curHash] = scrollY;
@@ -884,7 +934,10 @@ route(/^\/$/, () => {
       </div></article>`;
   }).join('');
 
-  view.innerHTML = topbar('Train', { sub: fmtDate(now, { weekday: 'long', month: 'long', day: 'numeric' }) }) + `
+  view.innerHTML = topbar('Train', {
+    sub: fmtDate(now, { weekday: 'long', month: 'long', day: 'numeric' }),
+    right: `<button class="icon-btn" id="sync-ind" data-action="go-settings" hidden>${icon('cloudOff')}</button>`,
+  }) + `
     <section class="card"><div class="row"><b style="flex:1">This week</b><span class="small muted">${plural(weekCount, 'workout')}</span></div>
       <div class="week-strip">${strip}</div></section>
     ${banner}${install}
@@ -1863,9 +1916,9 @@ GA['dl-clear'] = async () => {
 };
 
 async function backupFile() {
-  flushSaves.flush();
+  await flushSaves.flush();
   const data = { app: 'gym-tracker', version: 1, exportedAt: new Date().toISOString() };
-  for (const n of Object.keys(STORES)) data[n] = await db.all(n);
+  for (const n of Object.keys(SYNCED)) data[n] = await db.all(n);
   const name = `gym-backup-${ymd(Date.now())}.json`;
   return { data, name, file: new File([JSON.stringify(data)], name, { type: 'application/json' }) };
 }
@@ -1903,12 +1956,13 @@ async function importBackup(fileObj) {
     custom: (data.custom || []).filter(r => r?.id && r.name),
   };
   const when = Date.parse(data.exportedAt);
-  const msg = `${plural(clean.sessions.length, 'session')}, ${plural(clean.bodyweight.length, 'body-weight entry', 'body-weight entries')} and ${plural(clean.custom.length, 'custom exercise')}${when ? ` from ${fmtDate(when, { month: 'long', day: 'numeric', year: 'numeric' })}` : ''}.<br><b>This replaces everything currently on this phone.</b>`;
+  const msg = `${plural(clean.sessions.length, 'session')}, ${plural(clean.bodyweight.length, 'body-weight entry', 'body-weight entries')} and ${plural(clean.custom.length, 'custom exercise')}${when ? ` from ${fmtDate(when, { month: 'long', day: 'numeric', year: 'numeric' })}` : ''}.<br><b>This replaces everything in your account, on every device.</b>`;
   if (!await confirmSheet('Restore this backup?', msg, 'Replace my data', 'danger')) return;
   stopRest();
   await db.replaceAll(clean);
   await loadUserData();
   keepAwake(!!S.active);
+  syncNow();
   toast('Backup restored');
   replaceRoute('#/');
 }
@@ -1939,6 +1993,17 @@ route(/^\/settings$/, () => {
       <button class="btn primary block" style="margin-top:12px" data-action="install">Install Gym Tracker</button></section>`
       : standalone ? '' : `<section class="card"><div class="row">${icon('phone')}<div style="flex:1"><b>Install the app</b>
       <div class="small muted">In Chrome: menu ⋮ → <b>Add to home screen</b> → Install. In Samsung Internet: menu → <b>Add page to</b> → Home screen.</div></div></div></section>`}
+    <div class="section-label">Account</div>
+    <section class="card">
+      <div class="row">${avatar(S.auth.name)}<div style="flex:1;min-width:0"><b>${esc(S.auth.name)}</b>
+        <div class="small muted">@${esc(S.auth.username)}${S.auth.isAdmin ? ' · admin' : ''}</div></div></div>
+      <div class="sync-box">${icon('cloud')}<span id="sync-line" aria-live="polite"></span></div>
+      <div class="stack">
+        <button class="btn block" data-action="sync-now">${icon('refresh')}Sync now</button>
+        ${S.auth.isAdmin ? `<a class="btn block" href="#/admin">${icon('user')}People who can use the app</a>` : ''}
+        <button class="btn block" data-action="change-pw">${icon('key')}Change password</button>
+        <button class="btn block danger" data-action="sign-out">${icon('logout')}Sign out</button>
+      </div></section>
     <div class="section-label">Appearance</div>
     <section class="card"><div class="seg">${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) =>
       `<button class="${st.theme === k ? 'on' : ''}" aria-pressed="${st.theme === k}" data-action="theme" data-k="${k}">${l}</button>`).join('')}</div></section>
@@ -1955,7 +2020,7 @@ route(/^\/settings$/, () => {
     <section class="card" id="offline-card"><div class="small muted">Checking saved images…</div></section>
     <div class="section-label">Backup</div>
     <section class="card">
-      <p class="small muted" style="margin-bottom:12px">Everything is stored only on this phone. Export a backup now and then and keep it in Google Drive.
+      <p class="small muted" style="margin-bottom:12px">Your data syncs to your private account in the cloud. A backup file is an extra copy you can keep in Google Drive.
         ${st.lastBackup ? `Last backup: <b>${relDay(st.lastBackup)}</b>.` : '<b>No backup yet.</b>'}</p>
       <div class="stack">
         ${canShareFiles ? `<button class="btn block primary" data-action="share">${icon('share')}Share backup to Drive…</button>` : ''}
@@ -1965,7 +2030,7 @@ route(/^\/settings$/, () => {
     <div class="section-label">Data</div>
     <section class="card"><div class="stack">
       <button class="btn block" data-action="reset-days">Reset the 4 workout days</button>
-      <button class="btn block danger" data-action="erase">${icon('trash')}Erase all data</button></div></section>
+      <button class="btn block danger" data-action="erase">${icon('trash')}Erase all my data</button></div></section>
     <a class="card prog-row" href="#/about" style="margin-top:14px;padding:12px 16px">${icon('info')}<div class="grow"><b>About &amp; credits</b>
       <span class="small">Exercise data licence, how numbers are calculated</span></div>${icon('next')}</a>`;
   paintOffline();
@@ -1983,10 +2048,15 @@ route(/^\/settings$/, () => {
     toast('Workout days reset');
   };
   A.erase = async () => {
-    if (!await confirmSheet('Erase all data?', 'Deletes every session, body-weight entry, custom exercise and setting on this phone. Export a backup first if you might want it back.', 'Erase everything', 'danger')) return;
+    if (!await confirmSheet('Erase all your data?', 'Deletes every workout, body-weight entry, custom exercise and setting in your account, on this phone and in the cloud. Export a backup first if you might want it back.', 'Erase everything', 'danger')) return;
     stopRest();
-    await db.replaceAll({});
+    // A fresh start: default days and settings, written as new data so they replace the old copies everywhere.
+    await db.replaceAll({
+      templates: DEFAULT_TEMPLATES.map(makeTemplate),
+      settings: [{ key: 'prefs', ...DEFAULT_SETTINGS, restByEx: { ...DEFAULT_RESTS }, seeded: true }],
+    });
     await loadUserData();
+    syncNow();
     keepAwake(false);
     toast('All data erased');
     replaceRoute('#/');
@@ -2007,7 +2077,7 @@ route(/^\/about$/, () => {
   view.innerHTML = topbar('About', { back: '#/settings' }) + `
     <section class="card about"><div class="row"><img src="icons/icon-192.png" width="56" height="56" alt="" style="border-radius:14px">
       <div><h2>Gym Tracker</h2><div class="small muted" id="ver">Version …</div></div></div>
-      <p style="margin-top:14px">A workout log that runs entirely on your phone. There is no account and no tracking, and nothing is sent anywhere. Back up from Settings.</p></section>
+      <p style="margin-top:14px">Your workouts are saved on this phone first, so the app works without signal, and synced to your private account on Cloudflare (D1) whenever you're online. Only people the owner adds can sign in, and nobody else can see your log. There is no tracking or advertising.</p></section>
     <section class="card about"><h2>Exercise library</h2>
       <p style="margin-top:8px">The ${fmtNum(S.base.length)} exercises, their start and end photos, instructions and muscle data come from
         <a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener">free-exercise-db</a> by yuhonas, which builds on
@@ -2115,15 +2185,14 @@ async function keepAwake(want) {
   } catch { wakeLock = null; }
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { flushSaves.flush(); return; }
+  if (document.visibilityState === 'hidden') return; // saving + upload: see section 9
   if (S.active) keepAwake(true);
   tickRest();
 });
-addEventListener('pagehide', () => flushSaves.flush());
 // Offline image that was never cached: hide the broken icon (thumbnails keep their placeholder background).
 document.addEventListener('error', e => { if (e.target.tagName === 'IMG') e.target.classList.add('img-missing'); }, true);
 
-// ============================================================ 9. boot
+// ============================================================ 9. accounts & cloud sync
 async function loadUserData() {
   const [custom, templates, sessions, bw, settings] = await Promise.all(['custom', 'templates', 'sessions', 'bodyweight', 'settings'].map(n => db.all(n)));
   S.custom = custom;
@@ -2135,18 +2204,497 @@ async function loadUserData() {
   S.bw = bw.sort((a, b) => a.date.localeCompare(b.date));
   S.active = [...S.sessions].reverse().find(s => !s.end) || null;
   indexExercises();
-  if (!S.templates.length) {
-    S.templates = DEFAULT_TEMPLATES.map(makeTemplate);
-    for (const t of S.templates) await saveTemplate(t);
+  // Any missing default day is added as "older than anything", so a real copy in the cloud always wins.
+  const missing = DEFAULT_TEMPLATES.map(makeTemplate).filter(t => !S.templates.some(x => x.id === t.id));
+  if (missing.length) {
+    S.templates.push(...missing);
+    S.templates.sort((a, b) => a.order - b.order);
+    await db.write(missing.map(t => ({ store: 'templates', value: t })), { updatedAt: 1 });
   }
   if (!S.settings.seeded) {
     S.settings.restByEx = { ...DEFAULT_RESTS, ...S.settings.restByEx };
     S.settings.seeded = true;
-    await saveSettings();
+    await db.put('settings', { key: 'prefs', ...S.settings }, { updatedAt: 1 });
   }
   S.rev++;
   applyTheme();
 }
+
+/** JSON API call. Throws an Error with .status/.data, or .offline when the network is down. */
+async function api(method, path, body, { keepalive = false } = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method, credentials: 'same-origin', cache: 'no-store', keepalive,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    const e = new Error("You're offline");
+    e.offline = true;
+    throw e;
+  }
+  let data = null;
+  try { data = await res.json(); } catch { /* not JSON */ }
+  if (!res.ok || !data) {
+    const e = new Error(data?.error || `The server answered ${res.status}`);
+    e.status = res.status;
+    e.data = data;
+    throw e;
+  }
+  return data;
+}
+
+// ---- sync engine: push the outbox, pull everything newer than our cursor, repeat until done
+const SYNC = { running: false, again: false, timer: 0, last: 0, error: '', pending: 0 };
+function onLocalChange() {
+  SYNC.pending = Math.max(SYNC.pending, 1);
+  paintSync();
+  scheduleSync();
+}
+function scheduleSync(ms = 2000) {
+  clearTimeout(SYNC.timer);
+  SYNC.timer = setTimeout(() => syncNow(), ms);
+}
+async function syncNow({ keepalive = false } = {}) {
+  if (!S.auth || S.locked) return;
+  if (SYNC.running) { SYNC.again = true; return; }
+  SYNC.running = true;
+  clearTimeout(SYNC.timer);
+  paintSync();
+  let changed = false;
+  try {
+    for (let round = 0; round < 50; round++) {
+      const outbox = (await db.all('outbox')).sort((a, b) => a.updatedAt - b.updatedAt);
+      const batch = [];
+      let size = 0;
+      for (const o of outbox) {
+        const n = o.deleted ? 80 : JSON.stringify(o.data).length + 80;
+        if (batch.length && (size + n > 800000 || batch.length >= 300)) break;
+        batch.push(o);
+        size += n;
+      }
+      const res = await api('POST', '/api/sync', {
+        cursor: (await metaGet('cursor')) || 0,
+        changes: batch.map(o => ({ kind: SYNCED[o.store][0], id: o.id, deleted: o.deleted, data: o.data, updatedAt: o.updatedAt })),
+      }, { keepalive: keepalive && size < 50000 });
+      await dropSent(batch);
+      if (await applyRemote(res.changes)) changed = true;
+      await metaSet('cursor', res.cursor);
+      if (batch.length === outbox.length && !res.more) break;
+    }
+    SYNC.last = Date.now();
+    SYNC.error = '';
+    await metaSet('lastSync', SYNC.last);
+  } catch (err) {
+    if (err.status === 401) sessionEnded();
+    else if (err.status === 403 && err.data?.mustChange) { S.auth.mustChange = true; showPasswordScreen(); }
+    else SYNC.error = err.offline ? 'offline' : err.message;
+  } finally {
+    SYNC.running = false;
+    SYNC.pending = await db.count('outbox');
+    paintSync();
+    if (changed) refreshAfterSync();
+    if (SYNC.again) { SYNC.again = false; scheduleSync(300); }
+  }
+}
+/** Remove sent changes from the outbox unless they were edited again while in flight. */
+async function dropSent(batch) {
+  if (!batch.length) return;
+  const tx = (await idb()).transaction('outbox', 'readwrite');
+  const os = tx.objectStore('outbox');
+  for (const o of batch) {
+    const r = os.get(o.key);
+    r.onsuccess = () => { if (r.result && r.result.updatedAt === o.updatedAt) os.delete(o.key); };
+  }
+  await txDone(tx);
+}
+/** Apply other devices' changes to the local copy and to S. Returns true if anything changed. */
+async function applyRemote(changes) {
+  if (!changes?.length) return false;
+  const mine = new Map((await db.all('outbox')).map(o => [o.key, o]));
+  const ops = [];
+  for (const c of changes) {
+    const store = KIND_STORE[c.kind];
+    if (!store) continue;
+    const key = `${store}|${c.id}`;
+    const local = mine.get(key);
+    if (local && local.updatedAt > c.updatedAt) continue; // ours is newer and goes up next round
+    // The workout open on this phone belongs to this phone until it is finished.
+    if (store === 'sessions' && S.active?.id === c.id && !c.deleted && !c.data?.end) continue;
+    ops.push(c.deleted ? { store, key: c.id, del: true } : { store, value: c.data });
+    if (local) ops.push({ store: 'outbox', key, del: true });
+  }
+  if (!ops.length) return false;
+  await db.write(ops, { sync: false });
+  patchState(ops.filter(o => o.store !== 'outbox'));
+  return true;
+}
+function patchState(ops) {
+  let sessions = false, custom = false;
+  const upsert = (arr, keyName, o) => {
+    const k = String(o.del ? o.key : o.value[keyName]);
+    const i = arr.findIndex(x => String(x[keyName]) === k);
+    if (i >= 0) arr.splice(i, 1);
+    if (!o.del) arr.push(o.value);
+  };
+  for (const o of ops) {
+    if (o.store === 'sessions') { upsert(S.sessions, 'id', o); sessions = true; }
+    else if (o.store === 'templates') upsert(S.templates, 'id', o);
+    else if (o.store === 'bodyweight') upsert(S.bw, 'date', o);
+    else if (o.store === 'custom') { upsert(S.custom, 'id', o); custom = true; }
+    else if (o.store === 'settings' && !o.del && o.value.key === 'prefs') {
+      S.settings = { ...DEFAULT_SETTINGS, ...o.value };
+      delete S.settings.key;
+      applyTheme();
+    }
+  }
+  S.templates.sort((a, b) => a.order - b.order);
+  S.bw.sort((a, b) => a.date.localeCompare(b.date));
+  if (sessions) {
+    sortSessions();
+    if (!S.active || !S.sessions.includes(S.active) || S.active.end) S.active = [...S.sessions].reverse().find(s => !s.end) || null;
+    S.rev++;
+  }
+  if (custom) indexExercises();
+}
+/** Show synced changes, unless that would interrupt typing, a sheet or a workout in progress. */
+function refreshAfterSync() {
+  const el = document.activeElement;
+  const typing = el && view.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+  if (sheet || typing || /^\/(log|custom)/.test(parseHash().path) || parseHash().q.get('edit')) return;
+  rerender();
+}
+const relTime = t => {
+  const m = Math.round((Date.now() - t) / 6e4);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 24 * 60 ? `${Math.round(m / 60)} h ago` : relDay(t);
+};
+function syncText() {
+  if (SYNC.running) return 'Syncing…';
+  const why = SYNC.error === 'offline' ? " · you're offline" : SYNC.error ? ` · ${SYNC.error}` : '';
+  if (SYNC.pending) return `${plural(SYNC.pending, 'change')} waiting to upload${why}`;
+  if (SYNC.error === 'offline') return "Offline. Everything is saved on this phone and will upload later.";
+  if (SYNC.error) return SYNC.error;
+  return SYNC.last ? `All saved to the cloud · ${relTime(SYNC.last)}` : 'Not synced yet';
+}
+function paintSync() {
+  const line = $('#sync-line');
+  if (line) line.textContent = syncText();
+  const ind = $('#sync-ind');
+  if (ind) { ind.hidden = !(SYNC.pending && SYNC.error); ind.setAttribute('aria-label', syncText()); }
+}
+addEventListener('online', () => syncNow());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { syncNow(); return; }
+  // Leaving the app: save the open workout, then upload it while the page can still talk.
+  Promise.resolve(flushSaves.flush()).then(() => { if (S.auth && !S.locked) syncNow({ keepalive: true }); });
+});
+addEventListener('pagehide', () => flushSaves.flush());
+setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 60000);
+GA['sync-now'] = () => syncNow();
+GA['go-settings'] = () => go('#/settings');
+
+// ---- sign-in screens (shown instead of the app)
+function authView(html) {
+  resetView();
+  S.locked = true;
+  document.body.classList.add('auth-mode');
+  stopRest();
+  view.innerHTML = `<div class="auth-wrap"><div class="auth-brand"><img src="icons/icon-192.png" alt="" width="64" height="64"><h1>Gym Tracker</h1></div>${html}</div>`;
+}
+/** Wire the screen's form: submit runs `fn(form.elements)`; thrown errors show under the form. */
+function authForm(fn) {
+  const form = $('#auth-form'), err = $('.form-error', form), btn = $('button[type=submit]', form);
+  on(form, 'submit', async ev => {
+    ev.preventDefault();
+    err.hidden = true;
+    btn.disabled = true;
+    try { await fn(form.elements); }
+    catch (e) {
+      err.textContent = e.offline ? "You're offline. Connect to the internet to sign in." : e.message;
+      err.hidden = false;
+    } finally { if (btn.isConnected) btn.disabled = false; }
+  });
+}
+const field = (label, name, attrs = '') => `<label class="field"><span>${label}</span><input class="input" name="${name}" ${attrs}></label>`;
+const NO_AUTOCORRECT = 'autocapitalize="none" autocorrect="off" spellcheck="false"';
+GA.reload = () => location.reload();
+
+function showLogin({ message = '' } = {}) {
+  authView(`<form id="auth-form" class="card stack" novalidate>
+      <div><h2>Sign in</h2>${message ? `<p class="small muted" style="margin-top:4px">${esc(message)}</p>` : ''}</div>
+      ${field('Username', 'username', `autocomplete="username" ${NO_AUTOCORRECT} required value="${esc(S.auth?.username || '')}"`)}
+      ${field('Password', 'password', 'type="password" autocomplete="current-password" required')}
+      <p class="form-error" role="alert" hidden></p>
+      <button class="btn primary lg block" type="submit">Sign in</button>
+    </form>
+    <p class="small muted center" style="margin-top:16px">No account? Ask the owner of this app to add you.</p>`);
+  authForm(async f => {
+    const password = f.password.value;
+    const r = await api('POST', '/api/auth/login', { username: f.username.value, password });
+    await signedIn(r.user, { password });
+  });
+}
+function showSetup(configured) {
+  if (!configured) {
+    authView(`<div class="card"><h2>Almost ready</h2><p style="margin-top:8px">Add a secret named <b>SETUP_CODE</b> to this Pages project in Cloudflare and redeploy. Then reload this page to create your account.</p>
+      <button class="btn block" style="margin-top:14px" data-action="reload">Reload</button></div>`);
+    return;
+  }
+  authView(`<form id="auth-form" class="card stack" novalidate>
+      <div><h2>Create the owner account</h2><p class="small muted" style="margin-top:4px">This happens once. Enter the setup code you saved in Cloudflare, then choose your sign-in details. You'll be the admin and can add other people afterwards.</p></div>
+      ${field('Setup code', 'code', 'type="password" autocomplete="off" required')}
+      ${field('Your name', 'fullname', 'autocomplete="name" required')}
+      ${field('Username', 'username', `autocomplete="username" ${NO_AUTOCORRECT} required`)}
+      ${field('Password', 'password', 'type="password" autocomplete="new-password" required')}
+      ${field('Repeat password', 'password2', 'type="password" autocomplete="new-password" required')}
+      <p class="form-error" role="alert" hidden></p>
+      <button class="btn primary lg block" type="submit">Create account</button>
+    </form>`);
+  authForm(async f => {
+    if (f.password.value !== f.password2.value) throw new Error("The passwords don't match");
+    const r = await api('POST', '/api/auth/setup', { code: f.code.value, name: f.fullname.value, username: f.username.value, password: f.password.value });
+    await signedIn(r.user);
+  });
+}
+/** After signing in with a temporary password. `current` is pre-filled when we just typed it. */
+function showPasswordScreen(current = '') {
+  authView(`<form id="auth-form" class="card stack" novalidate>
+      <div><h2>Choose your password</h2><p class="small muted" style="margin-top:4px">Hi ${esc(S.auth?.name || '')}. You signed in with a temporary password; pick your own to continue.</p></div>
+      ${current ? '' : field('Temporary password', 'current', 'type="password" autocomplete="current-password" required')}
+      ${field('New password', 'next', 'type="password" autocomplete="new-password" required')}
+      ${field('Repeat new password', 'next2', 'type="password" autocomplete="new-password" required')}
+      <p class="form-error" role="alert" hidden></p>
+      <button class="btn primary lg block" type="submit">Save password</button>
+      <button class="btn ghost block" type="button" data-action="sign-out">Sign out</button>
+    </form>`);
+  authForm(async f => {
+    if (f.next.value !== f.next2.value) throw new Error("The new passwords don't match");
+    const r = await api('POST', '/api/auth/password', { current: current || f.current.value, next: f.next.value });
+    await signedIn(r.user);
+  });
+}
+function showProblem(message) {
+  authView(`<div class="card"><h2>Can't reach your account</h2><p style="margin-top:8px">${esc(message)}</p>
+    <button class="btn block" style="margin-top:14px" data-action="reload">Try again</button></div>`);
+}
+
+async function signedIn(user, { password } = {}) {
+  const owner = await metaGet('owner');
+  if (owner != null && owner !== user.id) {
+    // This phone still holds another account's data (their session ended without signing out).
+    const pending = await db.count('outbox');
+    const ok = await confirmSheet('Switch account on this phone?',
+      `This phone holds another account's data${pending ? `, including ${plural(pending, 'change')} that never reached the cloud` : ''}. Signing in as ${esc(user.name)} removes it from this phone.`,
+      'Continue', 'danger');
+    if (!ok) { await api('POST', '/api/auth/logout').catch(() => {}); return showLogin(); }
+    await db.wipe();
+    resetState();
+  }
+  S.auth = user;
+  await metaSet('auth', user);
+  if (user.mustChange) return showPasswordScreen(password);
+  await enterApp();
+}
+let appStarted = false;
+async function enterApp() {
+  view.innerHTML = '<div class="empty" style="padding-top:35vh">Loading your data…</div>';
+  if ((await metaGet('owner')) == null) await adoptLocalData();
+  await metaSet('owner', S.auth.id);
+  await loadUserData();
+  S.locked = false;
+  // First sync on this phone: wait briefly so your own days and history appear, not the defaults.
+  if (!(await metaGet('cursor'))) await Promise.race([syncNow(), new Promise(r => setTimeout(r, 6000))]);
+  SYNC.last = SYNC.last || (await metaGet('lastSync')) || 0;
+  if (S.locked) return; // sync found the session had ended
+  if (S.active) keepAwake(true);
+  if (!appStarted) { appStarted = true; addEventListener('hashchange', render); }
+  render();
+  syncNow();
+}
+/** First sign-in on a phone that already has workouts from before accounts existed. */
+async function adoptLocalData() {
+  const [sessions, bw, custom, templates, settings] = await Promise.all(['sessions', 'bodyweight', 'custom', 'templates', 'settings'].map(n => db.all(n)));
+  if (!sessions.length && !bw.length && !custom.length && !templates.length && !settings.length) return;
+  const done = sessions.filter(s => s.end).length;
+  const what = [done && plural(done, 'workout'), bw.length && plural(bw.length, 'body-weight entry', 'body-weight entries'), custom.length && plural(custom.length, 'custom exercise')]
+    .filter(Boolean).join(', ') || 'your workout days and settings';
+  const choice = await ask({
+    title: 'Data already on this phone',
+    msg: `This phone has ${esc(what)} from before you signed in. Add it to <b>${esc(S.auth.name)}</b>'s account?`,
+    buttons: [{ label: 'Add it to my account', value: 'add', cls: 'primary' }, { label: 'Delete it from this phone', value: 'drop', cls: 'danger' }],
+  });
+  if (choice === 'drop') {
+    const tx = (await idb()).transaction(Object.keys(SYNCED), 'readwrite');
+    for (const n of Object.keys(SYNCED)) tx.objectStore(n).clear();
+    await txDone(tx);
+    return;
+  }
+  // Queue everything for upload, dated by when it happened, so any copy already in the cloud only loses to newer data.
+  const op = (store, value, updatedAt) => ({ store, value, updatedAt });
+  await db.write([
+    ...sessions.map(s => op('sessions', s, s.end || s.start)),
+    ...bw.map(e => op('bodyweight', e, parseYmd(e.date))),
+    ...custom.map(e => op('custom', e, e.created || 2)),
+    ...templates.map(t => op('templates', t, 2)),
+    ...settings.map(s => op('settings', s, 2)),
+  ]);
+}
+function resetState() {
+  Object.assign(S, { custom: [], templates: [], sessions: [], bw: [], settings: { ...DEFAULT_SETTINGS }, active: null });
+  indexExercises();
+  S.rev++;
+  Object.assign(SYNC, { pending: 0, last: 0, error: '' });
+  navStack = [];
+  curHash = null;
+  history.replaceState(null, '', '#/');
+}
+function sessionEnded() {
+  if (S.locked) return;
+  showLogin({ message: 'You were signed out. Sign in again; nothing on this phone is lost.' });
+}
+async function signOut() {
+  await Promise.resolve(flushSaves.flush());
+  if (!S.locked) await syncNow();
+  const pending = await db.count('outbox');
+  if (pending && !await confirmSheet('Changes not uploaded yet',
+    `${plural(pending, 'change')} haven't reached the cloud yet. If you sign out now they'll be lost.`, 'Sign out anyway', 'danger')) return;
+  try { await api('POST', '/api/auth/logout'); }
+  catch (e) { if (e.offline) { toast('Connect to the internet to sign out'); return; } }
+  stopRest();
+  keepAwake(false);
+  await db.wipe();
+  S.auth = null;
+  resetState();
+  showLogin({ message: "You're signed out." });
+}
+GA['sign-out'] = () => signOut();
+
+// ---- account: change password, people (admin)
+function passwordSheet() {
+  const el = openSheet(`<h2>Change password</h2>
+    <form id="pw-form" class="stack" novalidate style="margin-top:10px">
+      ${field('Current password', 'current', 'type="password" autocomplete="current-password" required')}
+      ${field('New password', 'next', 'type="password" autocomplete="new-password" required')}
+      ${field('Repeat new password', 'next2', 'type="password" autocomplete="new-password" required')}
+      <p class="form-error" role="alert" hidden></p>
+      <button class="btn primary lg block" type="submit">Save password</button>
+    </form>`);
+  const form = $('#pw-form', el), err = $('.form-error', form);
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    err.hidden = true;
+    const f = form.elements;
+    try {
+      if (f.next.value !== f.next2.value) throw new Error("The new passwords don't match");
+      await api('POST', '/api/auth/password', { current: f.current.value, next: f.next.value });
+      await closeSheet();
+      toast('Password changed. Your other devices were signed out.');
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+  });
+}
+GA['change-pw'] = () => passwordSheet();
+
+function tempPassword() {
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789', a = new Uint8Array(12);
+  crypto.getRandomValues(a);
+  const s = [...a].map(n => abc[n % abc.length]).join('');
+  return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8)}`;
+}
+/** Fill an open sheet with the sign-in details to send someone. */
+function showLoginDetails(u, password) {
+  const text = `Gym Tracker: ${location.origin}\nUsername: ${u.username}\nTemporary password: ${password}\nYou'll choose your own password after signing in.`;
+  sheet.el.innerHTML = `<div class="grab"></div><h2>${esc(u.name)} can sign in now</h2>
+    <p class="msg">Send them these details. They'll pick their own password after signing in.</p>
+    <div class="login-details"><div class="small muted">Website</div><b>${esc(location.origin)}</b>
+      <div class="small muted">Username</div><b>${esc(u.username)}</b>
+      <div class="small muted">Temporary password</div><b class="mono">${esc(password)}</b></div>
+    <div class="btn-row" style="margin-top:14px"><button class="btn" data-action="copy-login">${icon('copy')}Copy</button>
+      ${navigator.share ? `<button class="btn" data-action="share-login">${icon('share')}Share</button>` : ''}</div>
+    <button class="btn primary lg block" style="margin-top:10px" data-action="close">Done</button>`;
+  Object.assign(sheet.actions, {
+    'copy-login': async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast("Couldn't copy. Select the text instead."); } },
+    'share-login': () => navigator.share({ text }).catch(() => {}),
+    close: () => closeSheet(),
+  });
+}
+function addUserSheet(reload) {
+  const el = openSheet(`<h2>Add a person</h2><p class="msg">They sign in with this username and temporary password, then choose their own password. Their log is private to them.</p>
+    <form id="nu-form" class="stack" novalidate>
+      ${field('Name', 'fullname', 'autocomplete="off" required')}
+      ${field('Username', 'username', `autocomplete="off" ${NO_AUTOCORRECT} required placeholder="e.g. ali"`)}
+      <label class="field"><span>Temporary password</span><div class="row"><input class="input mono" name="password" autocomplete="off" required value="${tempPassword()}" style="flex:1">
+        <button type="button" class="icon-btn tinted" data-action="regen" aria-label="Make a new temporary password">${icon('refresh')}</button></div></label>
+      <label class="switch-row"><div><b>Admin</b><div class="small muted">Can add, change and remove people</div></div>
+        <span class="switch"><input type="checkbox" name="admin"><span></span></span></label>
+      <p class="form-error" role="alert" hidden></p>
+      <button class="btn primary lg block" type="submit">Create account</button>
+    </form>`, { regen: () => { $('[name=password]', el).value = tempPassword(); } });
+  const form = $('#nu-form', el), err = $('.form-error', form);
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    err.hidden = true;
+    const f = form.elements;
+    try {
+      const { user } = await api('POST', '/api/admin/users', { name: f.fullname.value, username: f.username.value, password: f.password.value, isAdmin: f.admin.checked });
+      showLoginDetails(user, f.password.value);
+      reload();
+    } catch (e) { err.textContent = e.offline ? 'Connect to the internet to add people.' : e.message; err.hidden = false; }
+  });
+}
+function userSheet(u, reload) {
+  if (!u) return;
+  const self = u.id === S.auth.id;
+  const patch = async body => {
+    try { await api('PATCH', `/api/admin/users/${u.id}`, body); reload(); return true; }
+    catch (e) { toast(e.message); return false; }
+  };
+  const opts = self ? ['<p class="msg">This is you. Change your password from Settings.</p>'] : [
+    `<button class="opt" data-action="u-reset">${icon('key')}<span class="grow">Reset password<small>Gives them a new temporary password</small></span></button>`,
+    `<button class="opt" data-action="u-signout">${icon('logout')}<span class="grow">Sign out of every device</span></button>`,
+    `<button class="opt" data-action="u-toggle">${icon(u.disabled ? 'check' : 'x')}<span class="grow">${u.disabled ? 'Turn account back on' : 'Turn account off'}<small>${u.disabled ? 'They can sign in again' : 'Blocks sign-in and signs them out; their data is kept'}</small></span></button>`,
+    `<button class="opt" data-action="u-admin">${icon('user')}<span class="grow">${u.isAdmin ? 'Remove admin rights' : 'Make admin'}</span></button>`,
+    `<button class="opt danger-opt" data-action="u-delete">${icon('trash')}<span class="grow">Delete account<small>Removes them and all their data for good</small></span></button>`,
+  ];
+  openSheet(`<h2>${esc(u.name)}</h2><p class="msg">@${esc(u.username)}${u.mustChange ? " · hasn't picked a password yet" : ''}</p><div class="opts">${opts.join('')}</div>`, {
+    'u-reset': async () => { const pw = tempPassword(); if (await patch({ password: pw })) showLoginDetails(u, pw); },
+    'u-signout': async () => { if (await patch({ signOut: true })) { await closeSheet(); toast(`${u.name} was signed out everywhere`); } },
+    'u-toggle': async () => { if (await patch({ disabled: !u.disabled })) { await closeSheet(); toast(u.disabled ? `${u.name} can sign in again` : `${u.name}'s account is off`); } },
+    'u-admin': async () => { if (await patch({ isAdmin: !u.isAdmin })) { await closeSheet(); toast(u.isAdmin ? `${u.name} is no longer an admin` : `${u.name} is now an admin`); } },
+    'u-delete': async () => {
+      await closeSheet();
+      if (!await confirmSheet(`Delete ${u.name}?`, `This removes @${esc(u.username)} and all of their workouts, body weight and custom exercises. It can't be undone.`, 'Delete account', 'danger')) return;
+      try { await api('DELETE', `/api/admin/users/${u.id}`); toast(`${u.name} was deleted`); reload(); }
+      catch (e) { toast(e.message); }
+    },
+  });
+}
+const avatar = name => `<span class="avatar" aria-hidden="true">${esc((name || '?').trim()[0]?.toUpperCase() || '?')}</span>`;
+route(/^\/admin$/, () => {
+  if (!S.auth?.isAdmin) return replaceRoute('#/settings');
+  view.innerHTML = topbar('People', { back: '#/settings', right: `<button class="btn sm primary" data-action="add-user">${icon('plus')}Add</button>` }) + `
+    <p class="hint" style="margin:0 4px 12px">Only people listed here can open this app. Each has a private log.</p>
+    <section class="card" style="padding:4px 16px" id="users"><div class="empty">Loading…</div></section>`;
+  const token = renderToken;
+  let users = [];
+  const load = async () => {
+    try {
+      users = (await api('GET', '/api/admin/users')).users;
+      if (token !== renderToken) return;
+      $('#users').innerHTML = `<ul class="list">${users.map(u => `<li><button class="sess-row user-row" data-action="user" data-id="${u.id}">${avatar(u.name)}
+        <div class="grow"><b>${esc(u.name)}${u.id === S.auth.id ? ' (you)' : ''}</b>
+          <span class="small">@${esc(u.username)} · ${plural(u.workouts, 'workout')} · ${u.lastLogin ? `last sign-in ${relDay(u.lastLogin)}` : 'never signed in'}</span></div>
+        ${u.isAdmin ? '<span class="tag accent">Admin</span>' : ''}${u.disabled ? '<span class="tag">Off</span>' : ''}${icon('next')}</button></li>`).join('')}</ul>`;
+    } catch (e) {
+      if (token === renderToken) $('#users').innerHTML = `<div class="empty">${esc(e.offline ? 'Connect to the internet to manage people.' : e.message)}</div>`;
+    }
+  };
+  load();
+  A['add-user'] = () => addUserSheet(load);
+  A.user = el => userSheet(users.find(u => u.id === +el.dataset.id), load);
+});
+
+// ============================================================ 10. boot
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   let updating = false;
@@ -2169,16 +2717,23 @@ async function boot() {
     const res = await fetch('data/exercises.json');
     if (!res.ok) throw new Error(`exercises.json: HTTP ${res.status}`);
     S.base = await res.json();
-    await loadUserData();
+    indexExercises();
   } catch (err) {
     console.error(err);
     view.innerHTML = `<div class="empty" style="padding-top:30vh">Couldn't load the exercise library.<br>Open the app once with an internet connection so it can save itself for offline use.
-      <br><br><button class="btn" onclick="location.reload()">Try again</button></div>`;
+      <br><br><button class="btn" data-action="reload">Try again</button></div>`;
     return;
   }
-  if (S.active) keepAwake(true);
-  addEventListener('hashchange', render);
-  render();
   registerSW();
+  S.auth = await metaGet('auth');
+  if (S.auth) return S.auth.mustChange ? showPasswordScreen() : enterApp(); // works offline
+  // Not signed in on this phone yet: the server may still recognise the cookie.
+  try {
+    const me = await api('GET', '/api/auth/me');
+    await signedIn(me.user);
+  } catch (e) {
+    if (e.status === 401) return e.data?.needsSetup ? showSetup(e.data.setupConfigured) : showLogin();
+    showProblem(e.offline ? 'Connect to the internet once to sign in. After that the app works offline.' : e.message);
+  }
 }
 boot();

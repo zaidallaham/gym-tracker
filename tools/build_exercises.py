@@ -1,4 +1,4 @@
-"""Rebuild data/exercises.json and img/exercises/ from a free-exercise-db checkout.
+"""Rebuild public/data/exercises.json and public/img/exercises/ from a free-exercise-db checkout.
 
     git clone --depth 1 https://github.com/yuhonas/free-exercise-db.git
     python tools/build_exercises.py path/to/free-exercise-db [--force]
@@ -41,7 +41,7 @@ def main():
         sys.exit(__doc__)
     src = sys.argv[1]
     force = '--force' in sys.argv
-    app = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'public')
     data = json.load(open(os.path.join(src, 'dist', 'exercises.json'), encoding='utf-8'))
 
     out, jobs = [], []

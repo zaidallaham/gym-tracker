@@ -3,7 +3,7 @@
      so phones download the new shell; the app then offers "Update".
    - Exercise images: cache-first in their own cache, saved the first time they're viewed
      (or all at once from Settings). That cache is kept across versions. */
-const VERSION = 'v1.0.1';
+const VERSION = 'v1.1.0';
 const SHELL = `gym-shell-${VERSION}`;
 const IMAGES = 'gym-img-v1'; // also used by app.js; bump only if the image files change
 
@@ -45,6 +45,7 @@ self.addEventListener('fetch', event => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/')) return; // account + sync calls always go to the network
 
   if (req.mode === 'navigate') {
     // Single-page app: every navigation gets the cached shell (works offline, ignores ?query).

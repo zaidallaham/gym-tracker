@@ -1,8 +1,9 @@
 # Gym Tracker
 
 An installable, offline-first gym log for Android (Chrome / Samsung Internet), hosted on
-Cloudflare Pages at **https://gym.zaidallaham.com**. Plain HTML/CSS/JS, no framework and no
-build step. All data stays on the phone in IndexedDB.
+Cloudflare Pages at **https://gym.zaidallaham.com**. Plain HTML/CSS/JS with no framework and
+no build step. Only people you add can sign in. Each person's log is private and stored in
+Cloudflare D1, with a full copy on the phone so it keeps working at the gym without signal.
 
 - **876 exercises** with start/end photos that crossfade like a GIF (play/pause), numbered
   instructions, a front/back muscle map (primary strong, secondary light), and equipment,
@@ -17,83 +18,119 @@ build step. All data stays on the phone in IndexedDB.
 - **Progress:** per-exercise charts of estimated 1RM (Epley), top set and volume, plus PR
   badges. History calendar coloured by day (tap to view or edit), a weekly muscle-group view
   with body heatmap and 8-week grid, and a body-weight log with a 7-day trend.
-- **Backup:** export everything to a JSON file (or share it straight to Drive) and import it
-  back.
+- **Accounts:** username + password. The owner is the admin and adds, resets, turns off or
+  deletes people from **Settings → People who can use the app**.
+- **Cloud sync:** every change is saved on the phone first, then uploaded to D1 within a few
+  seconds when online. A new phone gets everything back after signing in.
+- **Backup:** you can still export everything to a JSON file (or share it to Drive) and
+  import it back.
 
 ## Files
 
 ```
-index.html            app shell
-app.js                the whole app (router, IndexedDB wrapper, views, charts, rest timer)
-styles.css            mobile-first styles, light + dark tokens
-sw.js                 service worker: cache-first shell, images cached as viewed
-manifest.json         PWA manifest (standalone, portrait, maskable icon, shortcuts, screenshots)
-_headers              Cloudflare Pages headers (sw.js never cached, long cache for images)
-data/exercises.json   free-exercise-db, minified (see data/SOURCE.md)
-img/exercises/<id>/   0.webp (start), 1.webp (end), t.webp (thumbnail)
-icons/                app icons + install-dialog screenshots
-tools/                scripts that generated data/, img/ and icons/ (not used at runtime)
+public/                     the website (Pages "build output directory")
+  index.html                app shell
+  app.js                    the whole app: router, IndexedDB + outbox, sync, views, charts, timer
+  styles.css                mobile-first styles, light + dark tokens
+  sw.js                     service worker: cache-first shell, images cached as viewed; /api is never cached
+  manifest.json             PWA manifest (standalone, portrait, maskable icon, shortcuts, screenshots)
+  _headers                  Cloudflare Pages headers
+  data/exercises.json       free-exercise-db, minified (see data/SOURCE.md)
+  img/exercises/<id>/       0.webp (start), 1.webp (end), t.webp (thumbnail)
+  icons/                    app icons + install-dialog screenshots
+functions/api/              Pages Functions (the API), run by Cloudflare at /api/*
+  _middleware.js            database check, schema, cross-site guard, session lookup, admin rule
+  _schema.js                D1 tables + readable views, created automatically on first use
+  _util.js                  password hashing (PBKDF2-SHA256), sessions, cookies, rate limits
+  auth/                     me · login · logout · setup (first admin) · password
+  sync.js                   one round trip: upload queued changes, download newer ones
+  admin/users/              list/create people · change/turn off/delete one person
+tools/                      scripts that generated public/data, public/img and public/icons
 ```
+
+## How accounts and sync work
+
+- **Sign-in:** passwords are hashed with PBKDF2-SHA256 (100,000 iterations, random salt).
+  The session lives in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie for 180 days, renewed
+  while you use the app. Requests from other sites are refused. After 8 wrong passwords,
+  sign-in pauses for 15 minutes.
+- **People:** someone you add gets a temporary password and must choose their own the first
+  time they sign in. Turning an account off or resetting its password signs that person out
+  everywhere.
+- **Offline-first sync:** the app reads and writes IndexedDB on the phone. Every change is
+  also queued in an outbox, uploaded about 2 seconds later, and again when the app goes to
+  the background or comes back online. Other devices' changes are downloaded on open, every
+  minute while the app is visible, and with each upload. If two devices edit the same record,
+  the newer edit wins. The workout open on a phone stays that phone's until it is finished.
+- **Signing out** (needs a connection) uploads anything pending, ends the session and wipes
+  the phone's copy. Your data stays in your account.
+
+### Your data in the D1 console
+
+Everything lives in one table, `records` (one JSON row per workout, day, weigh-in, custom
+exercise or settings object, per user). Readable views are created alongside it. In
+**Cloudflare → Storage & databases → D1 → gym-tracker → Console**:
+
+```sql
+SELECT * FROM workouts WHERE username = 'zaid' ORDER BY started_utc DESC;
+SELECT day, exercise, set_number, kg, reps, warmup FROM workout_sets WHERE username = 'zaid';
+SELECT date, kg FROM body_weight WHERE username = 'zaid' ORDER BY date;
+SELECT id, username, name, is_admin, disabled, datetime(last_login / 1000, 'unixepoch') FROM users;
+```
+
+## One-time Cloudflare setup
+
+The Pages project already exists (`gym-tracker`, connected to this repo, custom domain
+`gym.zaidallaham.com`). Accounts need four settings in the dashboard. Bindings, secrets and
+build settings take effect with the next deployment.
+
+1. **Create the database:** **Storage & databases → D1 SQL database → Create**, and name it
+   `gym-tracker`. You don't need to run any SQL; the tables create themselves.
+2. **Connect it:** **Workers & Pages → gym-tracker → Settings → Bindings → Add → D1
+   database**. Set the variable name to `DB` and pick the `gym-tracker` database.
+3. **Setup code:** **Settings → Variables and Secrets → Add**. Choose type **Secret**, name
+   `SETUP_CODE`, and as the value any phrase you'll remember for a minute. It's only used
+   once, to create the owner account.
+4. **Build output directory:** **Settings → Build → Build configuration → Edit**. Set the
+   build output directory to `public`; the build command stays empty.
+
+Then deploy (push to `main`, or **Deployments → Retry deployment**). Open
+https://gym.zaidallaham.com, enter the setup code, and choose your name, username and
+password. If the phone already has workouts from before accounts, the app offers to add them
+to your account. After that the setup page is closed for good, and you can delete
+`SETUP_CODE` if you like.
 
 ## Run it locally
 
-Any static server works; service workers are allowed on `localhost`.
+The front end alone works on any static server (service workers are allowed on `localhost`):
 
 ```bash
-python -m http.server 8787
+python -m http.server 8787 --directory public
 ```
 
-Then open http://localhost:8787. Chrome DevTools → Application → Manifest shows it as
-installable, and Application → Service workers shows `sw.js` activated.
+Without the API the app stops at "Can't reach your account". To run everything, use
+`wrangler pages dev public --d1 DB` on a machine where wrangler's local runtime is allowed;
+it's blocked on this PC by Windows Application Control.
 
-## Deploy to Cloudflare Pages
+## Shipping updates
 
-**1. Push the repo to GitHub.** Create an empty repository on github.com, for example
-`gym-tracker` (private is fine), without a README. Then, in this folder:
-
-```bash
-git remote add origin https://github.com/<your-username>/gym-tracker.git
-```
-
-```bash
-git push -u origin main
-```
-
-**2. Create the Pages project.** In the Cloudflare dashboard go to **Workers & Pages →
-Create → Pages → Connect to Git**. Authorise GitHub if asked, pick the `gym-tracker` repo,
-then set:
-
-| Setting | Value |
-|---|---|
-| Production branch | `main` |
-| Framework preset | `None` |
-| Build command | *(leave empty)* |
-| Build output directory | *(leave empty: the field already starts with `/`, which is the repository root)* |
-
-Click **Save and Deploy**. After a minute it's live at `https://<project>.pages.dev`.
-
-**3. Add the custom domain.** In the project go to **Custom domains → Set up a custom
-domain**, enter `gym.zaidallaham.com` and click **Continue → Activate domain**. Because the
-zone is already on Cloudflare, the `CNAME gym → <project>.pages.dev` record is created for
-you. Wait until the domain shows **Active** (usually a few minutes while the certificate is
-issued).
-
-**4. Shipping updates.** Make your change, **bump `VERSION` in `sw.js`** (for example
-`v1.0.0` → `v1.0.1`), then commit and push to `main`. Cloudflare redeploys automatically.
-Next time you open the app it shows *"A new version is ready · Update"*; tap it. If you
-forget to bump `VERSION`, phones keep the old cached files.
-Only bump `IMAGES` in `sw.js` (and `IMG_CACHE` in `app.js`) if the exercise photos change.
+Make your change, **bump `VERSION` in `public/sw.js`** (for example `v1.1.0` → `v1.1.1`),
+then commit and push to `main`. Cloudflare redeploys automatically. Next time you open the
+app it shows *"A new version is ready · Update"*; tap it. If you forget to bump `VERSION`,
+phones keep the old cached files. Only bump `IMAGES` in `sw.js` (and `IMG_CACHE` in
+`app.js`) if the exercise photos change. Changes under `functions/` take effect as soon as
+the deploy finishes.
 
 ### Size check (Cloudflare Pages limits: 20,000 files, 25 MiB per file)
 
-- 2,641 files, 33.2 MB in total
-- Largest file: `data/exercises.json`, 791 KB. The largest image is 47 KB.
+- About 2,640 static files, 33 MB in total
+- Largest file: `public/data/exercises.json`, 791 KB. The largest image is 47 KB.
 - The original dataset photos were 102 MB of JPEGs. They're resized to 640 px WebP plus
   200 px thumbnails.
 
 ## Install on the Samsung phone
 
-1. Open **https://gym.zaidallaham.com** in **Chrome**.
+1. Open **https://gym.zaidallaham.com** in **Chrome** and sign in.
 2. Tap **Install app**, either the card on the Train screen or in Settings. You can also use
    Chrome's menu **⋮ → Install app** (it may say *Add to Home screen → Install*).
 3. In **Samsung Internet** instead: tap the install icon in the address bar, or **≡ menu →
@@ -102,16 +139,6 @@ Only bump `IMAGES` in `sw.js` (and `IMG_CACHE` in `app.js`) if the exercise phot
 5. On Wi-Fi, go to **Settings → Download all images for offline** (about 32 MB) so every
    demo plays at the gym. Otherwise images are saved as you view them.
 6. Long-press the app icon for shortcuts that start a day directly.
-
-Use one browser: Chrome and Samsung Internet keep separate storage, so data logged in one
-isn't visible in the other.
-
-## Backups
-
-Everything lives only on the phone. If you clear site data or uninstall, it's gone. Go to
-**Settings → Share backup to Drive…** (or **Export backup file**, which saves to Downloads)
-every so often. **Import backup…** replaces the data on the phone with the file's contents
-after you confirm.
 
 ## Good to know
 
@@ -123,6 +150,10 @@ after you confirm.
   works.
 - **Day colours** (blue, magenta, yellow, green) were checked as a set for colour-blind
   separation. Every coloured dot also carries the day number.
+- **Desktop-site mode** on a phone is detected, and the app zooms itself to fit.
+- **What's public:** the app files and the public-domain exercise library can be fetched by
+  anyone who knows the address. Everything personal goes through `/api`, which needs a
+  signed-in session.
 
 ## Exercise data and credits
 
@@ -130,8 +161,8 @@ Exercises, photos and instructions come from
 [free-exercise-db](https://github.com/yuhonas/free-exercise-db) by yuhonas (building on
 [exercises.json](https://github.com/wrkout/exercises.json)). It's released into the public
 domain under the [Unlicense](https://unlicense.org); a copy is in
-`data/free-exercise-db-LICENSE.md` and the snapshot details are in `data/SOURCE.md`. The app
-credits it on **Settings → About**.
+`public/data/free-exercise-db-LICENSE.md` and the snapshot details are in
+`public/data/SOURCE.md`. The app credits it on **Settings → About**.
 
 To refresh the data from a newer snapshot:
 
@@ -143,5 +174,5 @@ git clone --depth 1 https://github.com/yuhonas/free-exercise-db.git ../free-exer
 python tools/build_exercises.py ../free-exercise-db --force
 ```
 
-Then bump `VERSION` in `sw.js`. If photos changed, also bump the image cache name in `sw.js`
-and `app.js`. Icons are drawn by `python tools/make_icons.py` (needs Pillow).
+Then bump `VERSION` in `public/sw.js`. If photos changed, also bump the image cache name in
+`sw.js` and `app.js`. Icons are drawn by `python tools/make_icons.py` (needs Pillow).
