@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Gym Tracker</title>
+  <meta name="description" content="Offline gym tracker: 870+ exercises with demos, a 4-day split, set logging, rest timer and progress charts.">
+  <meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d0f12" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Gym">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    // Apply a forced theme before first paint so there is no flash.
+    try { var t = localStorage.getItem('gym-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <main id="view" aria-live="polite">
+    <div class="empty" style="padding-top:40vh">Loading…</div>
+  </main>
+
+  <div id="restbar" class="restbar" hidden></div>
+
+  <nav class="tabbar" aria-label="Main">
+    <a href="#/" data-tab="train">
+      <svg class="i" viewBox="0 0 24 24"><path d="M6.5 6.5v11M3.5 9.5v5M17.5 6.5v11M20.5 9.5v5M6.5 12h11"/></svg>
+      <span>Train</span>
+    </a>
+    <a href="#/library" data-tab="library">
+      <svg class="i" viewBox="0 0 24 24"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-3.6-3.6"/></svg>
+      <span>Exercises</span>
+    </a>
+    <a href="#/progress" data-tab="progress">
+      <svg class="i" viewBox="0 0 24 24"><path d="M4 19h16M7 15.5v-4M12 15.5V6.5M17 15.5V9.5"/></svg>
+      <span>Progress</span>
+    </a>
+    <a href="#/history" data-tab="history">
+      <svg class="i" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 10h16M9 3v4M15 3v4"/></svg>
+      <span>History</span>
+    </a>
+    <a href="#/settings" data-tab="more">
+      <svg class="i" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4"/></svg>
+      <span>Settings</span>
+    </a>
+  </nav>
+
+  <div id="toast" class="toast-wrap" aria-live="assertive"></div>
+  <noscript><p style="padding:24px">Gym Tracker needs JavaScript.</p></noscript>
+  <script src="app.js" defer></script>
+</body>
+</html>
