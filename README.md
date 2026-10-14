@@ -68,7 +68,7 @@ then set:
 | Production branch | `main` |
 | Framework preset | `None` |
 | Build command | *(leave empty)* |
-| Build output directory | `/` (the repository root) |
+| Build output directory | *(leave empty: the field already starts with `/`, which is the repository root)* |
 
 Click **Save and Deploy**. After a minute it's live at `https://<project>.pages.dev`.
 
