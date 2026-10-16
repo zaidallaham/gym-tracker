@@ -199,6 +199,11 @@ body.resting #view { padding-bottom: calc(var(--nav-h) + var(--safe-b) + 96px); 
   background: var(--bg);
 }
 .topbar.has-back { padding-left: 4px; }
+/* A hairline under the sticky header once the page scrolls (no JS; ignored by older browsers). */
+@supports (animation-timeline: scroll()) {
+  .topbar { animation: topbar-line linear both; animation-timeline: scroll(root); animation-range: 0 24px; }
+  @keyframes topbar-line { to { box-shadow: 0 1px 0 var(--border); } }
+}
 .topbar h1 {
   flex: 1; min-width: 0;
   font-size: 21px; font-weight: 750; letter-spacing: -.01em;
@@ -284,6 +289,10 @@ body.resting #view { padding-bottom: calc(var(--nav-h) + var(--safe-b) + 96px); 
 }
 .list { list-style: none; margin: 0; padding: 0; }
 .list > li + li { border-top: 1px solid var(--border); }
+/* Pressed feedback on tappable rows; the shadow widens the highlight past the row's edges. */
+.sess-row, .prog-row, .ex-link { border-radius: 8px; transition: background-color .12s, box-shadow .12s; }
+.sess-row:active, .prog-row:active, .ex-link:active { background: var(--surface-2); box-shadow: 0 0 0 6px var(--surface-2); }
+.card:is(a):active, .live-banner:active { filter: brightness(.96); }
 .empty { padding: 28px 12px; text-align: center; color: var(--muted); }
 .empty .i { width: 40px; height: 40px; margin: 0 auto 10px; display: block; opacity: .6; }
 
@@ -389,10 +398,22 @@ textarea.input { min-height: 96px; resize: vertical; }
 
 .live-banner {
   display: flex; align-items: center; gap: 12px;
-  margin-top: 14px; padding: 14px 16px; border-radius: var(--radius);
+  padding: 14px 16px; border-radius: var(--radius);
   background: var(--good); color: #fff;
 }
 .live-banner + .card { margin-top: 14px; }
+
+/* "Up next": the next day of the split, tinted with that day's colour. */
+.next-card {
+  position: relative; overflow: hidden;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--day) 16%, var(--surface)) 0%, var(--surface) 65%);
+}
+.next-card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 4px; background: var(--day); }
+.next-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.next-top .dot-n { width: 24px; height: 24px; font-size: 12px; }
+.eyebrow { font-size: 12.5px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; color: var(--text-2); }
+.next-card h2 { font-size: 24px; font-weight: 800; letter-spacing: -.015em; line-height: 1.2; }
+.next-card .btn { margin-top: 14px; }
 .live-banner .i { width: 26px; height: 26px; }
 .live-banner b { display: block; font-size: 16px; }
 .live-banner span { font-size: 13.5px; opacity: .9; }
@@ -410,7 +431,7 @@ textarea.input { min-height: 96px; resize: vertical; }
 .day-card .meta { font-size: 13.5px; color: var(--muted); margin-top: 2px; }
 .day-card .preview { margin-top: 10px; font-size: 14px; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .day-card .actions { display: flex; gap: 10px; margin-top: 14px; }
-.day-card .actions .btn.primary { flex: 1; }
+.day-card .actions .btn:first-child { flex: 1; }
 .next-tag { margin-left: auto; }
 
 /* ---------- library ---------- */
@@ -419,9 +440,10 @@ textarea.input { min-height: 96px; resize: vertical; }
 .lib-meta select { width: auto; min-height: 36px; padding: 4px 34px 4px 12px; font-size: 14px; border-radius: 10px; background-position: calc(100% - 18px) 15px, calc(100% - 13px) 15px; }
 .ex-row { display: flex; align-items: center; gap: 4px; }
 .ex-link { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 0; color: inherit; }
+/* surface-2 shows while a thumbnail loads (no white flashes in dark mode); photos cover it. */
 .thumb {
   flex: none; width: 76px; height: 51px; border-radius: 10px; object-fit: cover;
-  background: var(--demo-bg);
+  background: var(--surface-2);
 }
 .thumb.ph { display: flex; align-items: center; justify-content: center; color: var(--muted); background: var(--surface-2); }
 .thumb.ph .i { width: 26px; height: 26px; }
@@ -515,7 +537,15 @@ body.resting .sticky-cta, body.resting .fab { bottom: calc(var(--nav-h) + var(--
 .log-head { display: flex; align-items: center; gap: 12px; padding: 4px 4px 12px; }
 .log-head .clock { font-size: 28px; font-weight: 780; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .log-head .stat { font-size: 13px; color: var(--muted); }
+.log-progress { height: 4px; margin: -4px 4px 14px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.log-progress i { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--good); transition: width .3s ease; }
 .ex-card { padding: 14px 12px 12px; }
+.card.ex-card.complete { border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+.done-mark {
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: -3px;
+  width: 18px; height: 18px; margin-right: 6px; border-radius: 50%; background: var(--good); color: #fff;
+}
+.done-mark .i { width: 12px; height: 12px; stroke-width: 3.2; }
 .ex-card .hd { display: flex; align-items: center; gap: 10px; }
 .ex-card .hd .thumb { width: 64px; height: 43px; cursor: pointer; }
 .ex-card .hd .ttl { flex: 1; min-width: 0; cursor: pointer; }
@@ -609,13 +639,16 @@ body.resting .sticky-cta, body.resting .fab { bottom: calc(var(--nav-h) + var(--
 /* ---------- history ---------- */
 .cal-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .cal-head h2 { flex: 1; text-align: center; }
-.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+/* minmax(0, 1fr) + min-width: 0: a day with workout dots must not widen its column (that pushed
+   Sunday off-screen on phones narrower than ~390px). */
+.cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
 .cal .dow { text-align: center; font-size: 11.5px; font-weight: 700; color: var(--muted); padding: 4px 0; }
 .cal .d {
-  aspect-ratio: 1; border-radius: 12px; position: relative;
+  min-width: 0; min-height: 46px; border-radius: 12px; position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
   padding-top: 6px; font-size: 13.5px; font-weight: 600; color: var(--text-2);
 }
+.cal .d:active { background: var(--surface-2); }
 .cal .d.out { visibility: hidden; }
 .cal .d.today { box-shadow: inset 0 0 0 2px var(--text); }
 .cal .d.sel { background: var(--surface-3); }

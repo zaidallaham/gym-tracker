@@ -1,4 +1,5 @@
 # Cloudflare Pages response headers (https://developers.cloudflare.com/pages/configuration/headers/)
+# These cover the static files. API responses set their own headers in functions/api/_util.js.
 
 # The service worker must always be re-checked so new versions roll out.
 /sw.js
@@ -13,7 +14,14 @@
 /img/*
   Cache-Control: public, max-age=2592000
 
+# Content-Security-Policy: only this site's own scripts run (no inline or injected ones), the
+# page talks only to this site, and nobody can show it inside a frame. Inline style attributes
+# are allowed because the views use them; custom-exercise photos are data: URLs.
 /*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
-  Permissions-Policy: camera=(self), microphone=(), geolocation=()
+  Cross-Origin-Opener-Policy: same-origin
+  Strict-Transport-Security: max-age=31536000
+  Permissions-Policy: camera=(self), microphone=(), geolocation=(), payment=(), usb=()

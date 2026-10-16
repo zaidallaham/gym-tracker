@@ -13,24 +13,7 @@
   <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="styles.css">
-  <script>
-    // Apply a forced theme before first paint so there is no flash.
-    try { var t = localStorage.getItem('gym-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
-    // "Desktop site" mode on a phone ignores the viewport tag: the page is laid out ~980px wide and
-    // shrunk to fit. Detect that (touch screen much narrower than the layout) and zoom the UI back up.
-    (function () {
-      var root = document.documentElement;
-      function fit() {
-        var w = window.innerWidth, s = screen.width, z = 1;
-        if (s > 0 && s < 820 && w > s * 1.2 && matchMedia('(pointer: coarse)').matches) z = Math.round(w / s * 1000) / 1000;
-        root.style.zoom = z === 1 ? '' : String(z);
-        root.style.setProperty('--zoom', String(z));
-        window.UI_ZOOM = z;
-      }
-      fit();
-      addEventListener('resize', fit);
-    })();
-  </script>
+  <script src="boot.js"></script>
 </head>
 <body>
   <main id="view" aria-live="polite">

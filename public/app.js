@@ -94,8 +94,11 @@ const SEARCH_PHRASES = [[/\bpec (deck|fly|flye)\b/g, 'butterfly'], [/\bohp\b/g, 
 // Workout-day colours: a CVD-checked set (blue, magenta, yellow, green). Never rely on colour alone —
 // every coloured dot also carries the day number.
 const DAY_COLORS = ['blue', 'magenta', 'yellow', 'green'];
-const dayBg = c => `var(--day-${c || 'blue'})`;
-const dayInk = c => `var(--on-day-${c || 'blue'})`;
+const dayColor = c => (DAY_COLORS.includes(c) ? c : 'blue');
+const dayBg = c => `var(--day-${dayColor(c)})`;
+const dayInk = c => `var(--on-day-${dayColor(c)})`;
+/** A custom-exercise photo is only ever a JPEG/PNG/WebP data URL (anything else is dropped). */
+const safePhoto = p => (typeof p === 'string' && /^data:image\/(jpeg|png|webp);base64,[a-z0-9+/]+=*$/i.test(p) ? p : null);
 
 const DEFAULT_TEMPLATES = [
   { id: 'd1', name: 'Chest + Triceps', color: 'blue', items: [
@@ -587,7 +590,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 
 // ============================================================ 6. components
 function thumbHtml(e, extra = '') {
-  if (e?.custom && e.photo) return `<img class="thumb" src="${e.photo}" alt="" ${extra}>`;
+  if (e?.custom && safePhoto(e.photo)) return `<img class="thumb" src="${safePhoto(e.photo)}" alt="" ${extra}>`;
   if (e?.img) return `<img class="thumb" src="${thumbUrl(e.id)}" loading="lazy" decoding="async" width="76" height="51" alt="" ${extra}>`;
   return `<div class="thumb ph" ${extra}>${icon('dumbbell')}</div>`;
 }
@@ -596,7 +599,7 @@ const subline = e => [e.primaryMuscles.map(m => MUSCLE_LABEL[m] || cap(m)).join(
 // ---- animated demo: crossfade start/end photos like a GIF
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 function demoHtml(e) {
-  if (e.custom) return e.photo ? `<div class="demo photo"><img src="${e.photo}" alt="${esc(e.name)}"></div>` : `<div class="demo ph">${icon('dumbbell')}</div>`;
+  if (e.custom) return safePhoto(e.photo) ? `<div class="demo photo"><img src="${safePhoto(e.photo)}" alt="${esc(e.name)}"></div>` : `<div class="demo ph">${icon('dumbbell')}</div>`;
   if (!e.img) return `<div class="demo ph" title="No photos for this exercise">${icon('dumbbell')}</div>`;
   return `<div class="demo" data-demo data-action="demo-toggle">
     <img class="f0" src="${imgUrl(e.id, 0)}" alt="${esc(e.name)}, start position" decoding="async">
@@ -906,30 +909,39 @@ route(/^\/$/, () => {
   const weekCount = fin.filter(s => s.start >= wk).length;
 
   let banner = '';
+  const lastText = t => (lastBy[t.id] ? `last done ${relDay(lastBy[t.id].start)}` : 'not done yet');
+  const up = !S.active && S.templates.find(t => t.id === next);
   if (S.active) {
     const t = sessionTotals(S.active);
     banner = `<a class="live-banner" href="#/log">${icon('timer')}<div class="grow" style="flex:1"><b>${esc(S.active.name)} in progress</b>
       <span>Started ${fmtTime(S.active.start)} · ${plural(t.sets, 'set')} done</span></div>${icon('next')}</a>`;
+  } else if (up?.items.length) {
+    // The next day in the rotation, one tap away at the top of the screen.
+    const i = tplIndex(up.id);
+    banner = `<section class="card next-card" style="--day:${dayBg(up.color)}">
+      <div class="next-top">${dotN(up.color, i + 1)}<span class="eyebrow">Up next · Day ${i + 1}</span></div>
+      <h2>${esc(up.name)}</h2>
+      <div class="small muted">${plural(up.items.length, 'exercise')} · ${lastText(up)}</div>
+      <button class="btn primary lg block" data-action="start" data-id="${esc(up.id)}">${icon('play')}Start ${esc(up.name)}</button></section>`;
   }
   const install = installEvt && !S.settings.installHidden ? `<section class="card"><div class="row">${icon('phone')}<div style="flex:1"><b>Install Gym Tracker</b>
     <div class="small muted">Home-screen icon, full screen, works offline.</div></div><button class="icon-btn" data-action="hide-install" aria-label="Dismiss">${icon('x')}</button></div>
     <button class="btn primary block" style="margin-top:12px" data-action="install">Install app</button></section>` : '';
 
   const cards = S.templates.map((t, i) => {
-    const last = lastBy[t.id];
     const isLive = S.active?.templateId === t.id;
     return `<article class="card day-card">
       <div class="stripe" style="background:${dayBg(t.color)}"></div>
       <div class="body">
         <div class="head">${dotN(t.color, i + 1).replace('dot-n', 'day-num')}
           <div style="flex:1;min-width:0"><h2>${esc(t.name)}</h2>
-            <div class="meta">${plural(t.items.length, 'exercise')} · ${last ? `last done ${relDay(last.start)}` : 'not done yet'}</div></div>
+            <div class="meta">${plural(t.items.length, 'exercise')} · ${lastText(t)}</div></div>
           ${isLive ? '<span class="tag good next-tag">In progress</span>' : t.id === next && !S.active ? '<span class="tag accent next-tag">Next up</span>' : ''}
         </div>
         <div class="preview">${t.items.map(x => esc(exName(x.exId))).join(' · ') || 'No exercises yet'}</div>
         <div class="actions">
-          <button class="btn primary lg" data-action="start" data-id="${t.id}" ${t.items.length ? '' : 'disabled'}>${icon(isLive ? 'next' : 'play')}${isLive ? 'Resume' : 'Start'}</button>
-          <a class="btn lg outline" href="#/day/${t.id}" aria-label="Edit ${esc(t.name)}">${icon('edit')}Edit</a>
+          <button class="btn lg ${isLive ? 'good' : ''}" data-action="start" data-id="${esc(t.id)}" ${t.items.length ? '' : 'disabled'}>${icon(isLive ? 'next' : 'play')}${isLive ? 'Resume' : 'Start'}</button>
+          <a class="btn lg outline" href="#/day/${esc(t.id)}" aria-label="Edit ${esc(t.name)}">${icon('edit')}Edit</a>
         </div>
       </div></article>`;
   }).join('');
@@ -937,10 +949,10 @@ route(/^\/$/, () => {
   view.innerHTML = topbar('Train', {
     sub: fmtDate(now, { weekday: 'long', month: 'long', day: 'numeric' }),
     right: `<button class="icon-btn" id="sync-ind" data-action="go-settings" hidden>${icon('cloudOff')}</button>`,
-  }) + `
+  }) + `${banner}
     <section class="card"><div class="row"><b style="flex:1">This week</b><span class="small muted">${plural(weekCount, 'workout')}</span></div>
       <div class="week-strip">${strip}</div></section>
-    ${banner}${install}
+    ${install}
     <div class="section-label">Your 4-day split</div>
     ${cards}`;
   A['hide-install'] = () => { S.settings.installHidden = true; saveSettings(); rerender(); };
@@ -994,7 +1006,7 @@ function addToWorkoutSheet(exId) {
   }
   S.templates.forEach((t, i) => {
     const has = t.items.some(x => x.exId === exId);
-    rows.push(`<button class="opt ${has ? 'on' : ''}" data-action="atw-go" data-t="${t.id}">${dotN(t.color, i + 1)}
+    rows.push(`<button class="opt ${has ? 'on' : ''}" data-action="atw-go" data-t="${esc(t.id)}">${dotN(t.color, i + 1)}
       <span class="grow">${esc(t.name)}<small>${has ? 'In this day · tap to remove' : plural(t.items.length, 'exercise')}</small></span>${icon(has ? 'check' : 'plus', has ? 'ok' : '')}</button>`);
   });
   openSheet(`<h2>Add to workout</h2><p class="msg">${esc(e.name)}</p><div class="opts">${rows.join('')}</div>`, {
@@ -1147,7 +1159,7 @@ async function resizePhoto(file, max = 900) {
   return c.toDataURL('image/jpeg', 0.82);
 }
 function customForm(e) {
-  let photo = e?.photo || null;
+  let photo = safePhoto(e?.photo);
   const sec = new Set(e?.secondaryMuscles || []);
   view.innerHTML = topbar(e ? 'Edit exercise' : 'New exercise', { back: e ? `#/ex/${encodeURIComponent(e.id)}` : '#/library' }) + `
     <form id="cf" class="card" novalidate>
@@ -1232,8 +1244,8 @@ route(/^\/day\/([\w-]+)$/, (q, id) => {
     <section class="card"><label class="field"><span>Name</span><input class="input" id="tname" value="${esc(t.name)}" maxlength="40" enterkeyhint="done"></label></section>
     <div class="section-label">${plural(t.items.length, 'exercise')} · drag ${icon('grip', 'small')} to reorder</div>
     <section class="card" style="padding:4px 8px 4px 2px">${t.items.length ? `<ul class="list" id="tpl-list">${items}</ul>` : '<div class="empty">No exercises yet.</div>'}</section>
-    <a class="btn block lg outline" style="margin-top:14px" href="#/library?pick=day:${t.id}">${icon('plus')}Add exercises</a>
-    <button class="btn block lg primary" style="margin-top:10px" data-action="start" data-id="${t.id}" ${t.items.length ? '' : 'disabled'}>${icon('play')}Start ${esc(t.name)}</button>`;
+    <a class="btn block lg outline" style="margin-top:14px" href="#/library?pick=day:${esc(t.id)}">${icon('plus')}Add exercises</a>
+    <button class="btn block lg primary" style="margin-top:10px" data-action="start" data-id="${esc(t.id)}" ${t.items.length ? '' : 'disabled'}>${icon('play')}Start ${esc(t.name)}</button>`;
 
   on($('#tname'), 'change', async ev => {
     const v = ev.target.value.trim();
@@ -1309,8 +1321,8 @@ function exCard(ctx, e, ei) {
     const p = x.warmup ? prevW[wi++] : prevK[ki++];
     const label = x.warmup ? 'W' : String(ki);
     const n = `<button class="set-n ${x.warmup ? 'w' : ''}" data-action="warm" aria-label="${x.warmup ? 'Warm-up set' : `Set ${label}`}. Tap to toggle warm-up">${label}</button>`;
-    const kg = `<input class="num" inputmode="decimal" enterkeyhint="next" data-f="kg" value="${x.kg ?? ''}" placeholder="${p?.kg ?? 'kg'}" aria-label="Weight in kg, set ${label}">`;
-    const reps = `<input class="num" inputmode="numeric" enterkeyhint="done" data-f="reps" value="${x.reps ?? ''}" placeholder="${p?.reps ?? 'reps'}" aria-label="Reps, set ${label}">`;
+    const kg = `<input class="num" inputmode="decimal" enterkeyhint="next" data-f="kg" value="${esc(x.kg)}" placeholder="${esc(p?.kg ?? 'kg')}" aria-label="Weight in kg, set ${label}">`;
+    const reps = `<input class="num" inputmode="numeric" enterkeyhint="done" data-f="reps" value="${esc(x.reps)}" placeholder="${esc(p?.reps ?? 'reps')}" aria-label="Reps, set ${label}">`;
     if (!live) return `<div class="set-row edit" data-ei="${ei}" data-si="${si}">${n}${kg}${reps}<button class="icon-btn" data-action="del-set" aria-label="Delete set ${label}">${icon('x')}</button></div>`;
     const pr = flags.get(si);
     return `<div class="set-row ${x.done ? 'done' : ''}" data-ei="${ei}" data-si="${si}">${n}
@@ -1321,9 +1333,10 @@ function exCard(ctx, e, ei) {
     ? '<div class="set-row head" aria-hidden="true"><span>Set</span><span>Previous</span><span>kg</span><span>Reps</span><span>Done</span></div>'
     : '<div class="set-row edit head" aria-hidden="true"><span>Set</span><span>kg</span><span>Reps</span><span></span></div>';
   const demoAttr = `data-action="demo" data-id="${esc(e.exId)}"`;
-  return `<section class="card ex-card" data-ei="${ei}">
+  const complete = live && e.sets.length > 0 && e.sets.every(x => x.done);
+  return `<section class="card ex-card ${complete ? 'complete' : ''}" data-ei="${ei}">
     <div class="hd">${thumbHtml(ex, ex ? demoAttr : '')}
-      <div class="ttl" ${ex ? demoAttr : ''}><b>${esc(name)}</b>
+      <div class="ttl" ${ex ? demoAttr : ''}><b>${complete ? `<span class="done-mark" aria-label="All sets done">${icon('check')}</span>` : ''}${esc(name)}</b>
         <div class="sub">${e.target ? `<span class="small muted">Target ${e.target.sets} × ${e.target.reps}</span>` : ''}
         ${live ? `<button class="rest-chip" data-action="rest" data-id="${esc(e.exId)}" aria-label="Rest ${fmtRest(restFor(e.exId))}. Tap to change">${icon('timer')}${fmtRest(restFor(e.exId))}</button>` : ''}</div></div>
       <button class="icon-btn" data-action="ex-menu" aria-label="Options for ${esc(name)}">${icon('more')}</button></div>
@@ -1371,12 +1384,13 @@ function sessionEditor(s, live) {
     right: live ? `<button class="btn sm good" data-action="finish">${icon('check')}Finish</button>` : '<button class="btn sm primary" data-action="edit-done">Done</button>',
   }) + (live
     ? `<div class="log-head"><div><div class="clock" id="clock">${fmtClock(Date.now() - s.start)}</div><div class="stat" id="lstat"></div></div>
-        <span class="spacer"></span><button class="icon-btn tinted" data-action="sess-menu" aria-label="Workout options">${icon('more')}</button></div>`
+        <span class="spacer"></span><button class="icon-btn tinted" data-action="sess-menu" aria-label="Workout options">${icon('more')}</button></div>
+      <div class="log-progress" aria-hidden="true"><i id="lprog"></i></div>`
     : `<section class="card"><div class="row" style="align-items:flex-end">
         <label class="field" style="flex:1;margin:0"><span>Date</span><input class="input" type="date" id="sdate" value="${ymd(s.start)}" max="${ymd(Date.now())}"></label>
         <label class="field" style="width:110px;margin:0"><span>Minutes</span><input class="input" id="sdur" inputmode="numeric" value="${Math.round((s.end - s.start) / 6e4)}"></label></div></section>`)
   + `<div id="cards">${cardsHtml()}</div>
-    <a class="btn block lg outline" style="margin-top:14px" href="#/library?pick=${live ? 'log' : `edit:${s.id}`}">${icon('plus')}Add exercise</a>
+    <a class="btn block lg outline" style="margin-top:14px" href="#/library?pick=${live ? 'log' : `edit:${esc(s.id)}`}">${icon('plus')}Add exercise</a>
     ${live ? '<p class="hint">Tap a set number to mark a warm-up. Tick ✓ to log a set and start the rest timer.</p>'
       : `<button class="btn block lg danger" style="margin-top:10px" data-action="del-session">${icon('trash')}Delete session</button>`}`;
 
@@ -1385,8 +1399,10 @@ function sessionEditor(s, live) {
   const updateStats = () => {
     const el = live && mine() && $('#lstat');
     if (!el) return;
-    const t = sessionTotals(s);
-    el.textContent = `${plural(t.sets, 'working set')} · ${fmtNum(t.vol)} kg`;
+    const t = sessionTotals(s), sets = s.exercises.flatMap(e => e.sets);
+    const exDone = s.exercises.filter(e => e.sets.length && e.sets.every(x => x.done)).length;
+    el.textContent = `${exDone}/${s.exercises.length} exercises · ${plural(t.sets, 'working set')} · ${fmtNum(t.vol)} kg`;
+    $('#lprog').style.width = `${sets.length ? (sets.filter(x => x.done).length / sets.length) * 100 : 0}%`;
   };
   const changed = () => { touchSession(s); updateStats(); };
   const rowOf = el => { const r = el.closest('.set-row'); return { ei: +r.dataset.ei, si: +r.dataset.si, row: r }; };
@@ -1575,7 +1591,7 @@ const setsText = sets => sets.map(x => `${x.warmup ? 'W ' : ''}${x.kg > 0 ? `${f
 const exerciseList = s => `<section class="card"><div class="card-title"><h2>Exercises</h2></div><ul class="list">${s.exercises.map(e => {
   const st = setStats(e.sets);
   return `<li><a class="prog-row" href="#/progress/ex/${encodeURIComponent(e.exId)}"><div class="grow"><b>${esc(exName(e.exId, e.name))}</b>
-    <div class="hist-sets">${setsText(e.sets)}</div></div><span class="small muted">${st?.vol ? `${fmtNum(st.vol)} kg` : st ? plural(st.reps, 'rep') : ''}</span></a></li>`;
+    <div class="hist-sets">${esc(setsText(e.sets))}</div></div><span class="small muted">${st?.vol ? `${fmtNum(st.vol)} kg` : st ? plural(st.reps, 'rep') : ''}</span></a></li>`;
 }).join('')}</ul></section>`;
 
 route(/^\/summary\/([\w-]+)$/, (q, id) => {
@@ -1585,7 +1601,7 @@ route(/^\/summary\/([\w-]+)$/, (q, id) => {
   view.innerHTML = `<div class="hero"><div class="badge-big">${icon(prs.length ? 'trophy' : 'check')}</div>
       <h1>Workout complete</h1><p class="muted">${esc(s.name)} · ${fmtDate(s.start)}${prs.length ? ` · ${plural(prs.length, 'new record')}` : ''}</p></div>
     ${statTiles(sessionTotals(s))}${prCard(prs)}${exerciseList(s)}
-    <div class="btn-row" style="margin-top:16px"><a class="btn lg" href="#/session/${s.id}">View session</a>
+    <div class="btn-row" style="margin-top:16px"><a class="btn lg" href="#/session/${esc(s.id)}">View session</a>
       <button class="btn lg primary" data-action="replace" data-to="#/">Done</button></div>`;
 });
 route(/^\/session\/([\w-]+)$/, (q, id) => {
@@ -1596,9 +1612,9 @@ route(/^\/session\/([\w-]+)$/, (q, id) => {
   view.innerHTML = topbar(s.name, {
     back: '#/history',
     sub: `${fmtDate(s.start, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })} · ${fmtTime(s.start)}`,
-    right: `<a class="icon-btn" href="#/session/${s.id}?edit=1" aria-label="Edit session">${icon('edit')}</a>`,
+    right: `<a class="icon-btn" href="#/session/${esc(s.id)}?edit=1" aria-label="Edit session">${icon('edit')}</a>`,
   }) + statTiles(sessionTotals(s)) + prCard(analysis().prs.get(s.id) || [], 'Records set') + exerciseList(s) + `
-    <div class="btn-row" style="margin-top:16px"><a class="btn lg" href="#/session/${s.id}?edit=1">${icon('edit')}Edit</a>
+    <div class="btn-row" style="margin-top:16px"><a class="btn lg" href="#/session/${esc(s.id)}?edit=1">${icon('edit')}Edit</a>
       <button class="btn lg danger" data-action="del">${icon('trash')}Delete</button></div>`;
   A.del = async () => {
     if (!await confirmSheet('Delete this session?', 'It will be removed from your history and charts.', 'Delete session', 'danger')) return;
@@ -1612,7 +1628,7 @@ route(/^\/session\/([\w-]+)$/, (q, id) => {
 const hist = { month: startOfMonth(Date.now()), sel: '' };
 const sessRow = s => {
   const t = sessionTotals(s), prs = analysis().prs.get(s.id)?.length || 0;
-  return `<li><a class="sess-row" href="#/session/${s.id}">${dotN(s.color, tplIndex(s.templateId) + 1 || '•')}
+  return `<li><a class="sess-row" href="#/session/${esc(s.id)}">${dotN(s.color, tplIndex(s.templateId) + 1 || '•')}
     <div class="grow"><b>${esc(s.name)}</b><span class="small">${fmtDate(s.start)} · ${fmtDur(t.dur)} · ${fmtNum(t.vol)} kg</span></div>
     ${prs ? `<span class="tag accent" aria-label="${plural(prs, 'record')}">${icon('trophy')}${prs}</span>` : ''}${icon('next')}</a></li>`;
 };
@@ -1715,8 +1731,8 @@ route(/^\/progress\/ex\/(.+)$/, (q, id) => {
   const log = [...all].reverse().slice(0, 40).map(p => {
     const s = S.sessions.find(x => x.id === p.id);
     const sets = s ? s.exercises.filter(e => e.exId === id).flatMap(e => e.sets) : [];
-    return `<li><a class="prog-row" href="#/session/${p.id}"><div class="grow"><b>${fmtDate(p.t, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</b>
-      <div class="hist-sets">${setsText(sets)}</div></div>${prSessions.has(p.id) ? `<span class="tag accent">${icon('trophy')}PR</span>` : ''}
+    return `<li><a class="prog-row" href="#/session/${esc(p.id)}"><div class="grow"><b>${fmtDate(p.t, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</b>
+      <div class="hist-sets">${esc(setsText(sets))}</div></div>${prSessions.has(p.id) ? `<span class="tag accent">${icon('trophy')}PR</span>` : ''}
       <span class="small muted">${bw ? '' : `${fmtNum(p.e1, 1)} kg`}</span></a></li>`;
   }).join('');
   view.innerHTML = topbar(name, {
@@ -1828,7 +1844,7 @@ route(/^\/progress\/body$/, () => {
     <div class="section-label">Entries</div>
     <section class="card" style="padding:4px 16px"><ul class="list">${[...entries].reverse().slice(0, 60).map(e => `<li class="row" style="min-height:52px">
       <span style="flex:1">${fmtDate(parseYmd(e.date), { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span><b class="tnum">${fmtW(e.kg)} kg</b>
-      <button class="icon-btn" data-action="bw-del" data-d="${e.date}" aria-label="Delete entry">${icon('x')}</button></li>`).join('')}</ul></section>`
+      <button class="icon-btn" data-action="bw-del" data-d="${esc(e.date)}" aria-label="Delete entry">${icon('x')}</button></li>`).join('')}</ul></section>`
     : `<div class="card empty">${icon('chart')}Log your weight to start a trend line.</div>`}`;
   if (entries.length) {
     lineChart($('#bwc'), {
@@ -1944,17 +1960,60 @@ GA.share = async () => {
   try { await navigator.share({ files: [file], title: 'Gym Tracker backup' }); markBackup(); rerender(); }
   catch (e) { if (e.name !== 'AbortError') toast("Sharing didn't work. Use Export instead."); }
 };
+/**
+ * Rebuild a backup file's records field by field, keeping only known fields with the right types.
+ * A backup can come from anywhere, so nothing in it reaches the database or the page unchecked.
+ */
+function cleanBackup(data) {
+  const arr = v => (Array.isArray(v) ? v : []);
+  const id = v => (typeof v === 'string' && /^[\w-]{1,120}$/.test(v) ? v : null);
+  const text = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+  const num = (v, lo, hi) => (typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : null);
+  const int = (v, lo, hi) => { const n = num(v, lo, hi); return n == null ? null : Math.round(n); };
+  const time = v => num(v, 0, Date.now() + DAY);
+  const muscles = v => arr(v).filter(m => MUSCLES.includes(m));
+  const set = x => ({ reps: int(x?.reps, 0, 1000), kg: num(x?.kg, 0, 2000), warmup: !!x?.warmup, done: !!x?.done });
+  const sessions = arr(data.sessions).map(s => {
+    const start = time(s?.start), end = s?.end == null ? null : time(s.end);
+    if (!id(s?.id) || !start) return null;
+    return {
+      id: s.id, templateId: id(s.templateId) || '', name: text(s.name, 80) || 'Workout', color: dayColor(s.color),
+      start, end: end && end >= start ? end : null,
+      exercises: arr(s.exercises).filter(e => id(e?.exId)).map(e => ({
+        exId: e.exId, name: text(e.name, 120),
+        ...(e.target ? { target: { sets: int(e.target.sets, 1, 50) || 3, reps: int(e.target.reps, 1, 1000) || 10 } } : {}),
+        sets: arr(e.sets).slice(0, 100).map(set),
+      })),
+    };
+  }).filter(Boolean);
+  const templates = arr(data.templates).filter(t => id(t?.id)).map((t, i) => ({
+    id: t.id, name: text(t.name, 40) || `Day ${i + 1}`, color: dayColor(t.color), order: int(t.order, 0, 1000) ?? i,
+    items: arr(t.items).filter(x => id(x?.exId)).map(x => ({ exId: x.exId, sets: int(x.sets, 1, 12) || 3, reps: int(x.reps, 1, 100) || 10 })),
+  }));
+  const bodyweight = arr(data.bodyweight)
+    .filter(b => typeof b?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.date) && num(b.kg, 1, 1000) > 0)
+    .map(b => ({ date: b.date, kg: num(b.kg, 1, 1000) }));
+  const custom = arr(data.custom).filter(e => id(e?.id) && text(e.name, 80).trim()).map(e => ({
+    id: e.id, custom: true, name: text(e.name, 80).trim(), primaryMuscles: muscles(e.primaryMuscles), secondaryMuscles: muscles(e.secondaryMuscles), equipment: EQUIPMENT.some(q => q.m[0] === e.equipment) ? e.equipment : 'other',
+    category: 'strength', instructions: [], notes: text(e.notes, 2000), photo: safePhoto(e.photo), img: 0, created: time(e.created) || Date.now(),
+  }));
+  const p = arr(data.settings).find(r => r?.key === 'prefs');
+  const settings = p ? [{
+    key: 'prefs', ...DEFAULT_SETTINGS,
+    theme: ['system', 'light', 'dark'].includes(p.theme) ? p.theme : 'system',
+    defaultRest: int(p.defaultRest, 15, 600) || DEFAULT_SETTINGS.defaultRest,
+    vibrate: p.vibrate !== false, sound: p.sound !== false, wakeLock: p.wakeLock !== false,
+    restByEx: Object.fromEntries(Object.entries(p.restByEx && typeof p.restByEx === 'object' ? p.restByEx : {})
+      .filter(([k, v]) => id(k) && int(v, 15, 600)).map(([k, v]) => [k, int(v, 15, 600)])),
+    seeded: !!p.seeded, lastBackup: time(p.lastBackup) || 0, installHidden: !!p.installHidden,
+  }] : [];
+  return { settings, templates, sessions, bodyweight, custom };
+}
 async function importBackup(fileObj) {
   let data;
   try { data = JSON.parse(await fileObj.text()); } catch { toast("That file isn't a valid backup"); return; }
   if (data?.app !== 'gym-tracker' || !Array.isArray(data.sessions)) { toast("That isn't a Gym Tracker backup"); return; }
-  const clean = {
-    settings: (data.settings || []).filter(r => r?.key),
-    templates: (data.templates || []).filter(r => r?.id && Array.isArray(r.items)),
-    sessions: data.sessions.filter(r => r?.id && Array.isArray(r.exercises) && r.start),
-    bodyweight: (data.bodyweight || []).filter(r => r?.date && r.kg > 0),
-    custom: (data.custom || []).filter(r => r?.id && r.name),
-  };
+  const clean = cleanBackup(data);
   const when = Date.parse(data.exportedAt);
   const msg = `${plural(clean.sessions.length, 'session')}, ${plural(clean.bodyweight.length, 'body-weight entry', 'body-weight entries')} and ${plural(clean.custom.length, 'custom exercise')}${when ? ` from ${fmtDate(when, { month: 'long', day: 'numeric', year: 'numeric' })}` : ''}.<br><b>This replaces everything in your account, on every device.</b>`;
   if (!await confirmSheet('Restore this backup?', msg, 'Replace my data', 'danger')) return;
@@ -2499,6 +2558,12 @@ async function signedIn(user, { password } = {}) {
 let appStarted = false;
 async function enterApp() {
   view.innerHTML = '<div class="empty" style="padding-top:35vh">Loading your data…</div>';
+  try { await libraryReady; } catch (err) {
+    console.error(err);
+    view.innerHTML = `<div class="empty" style="padding-top:30vh">Couldn't load the exercise library.<br>Open the app once with an internet connection so it can save itself for offline use.
+      <br><br><button class="btn" data-action="reload">Try again</button></div>`;
+    return;
+  }
   if ((await metaGet('owner')) == null) await adoptLocalData();
   await metaSet('owner', S.auth.id);
   await loadUserData();
@@ -2712,19 +2777,16 @@ function registerSW() {
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   }).catch(err => console.warn('Service worker registration failed', err));
 }
+// The exercise library downloads (or comes from the offline cache) while the phone's own data
+// is read; only the app itself waits for it, sign-in screens don't. boot.js started the request.
+const libraryReady = Promise.resolve(window.EXERCISES).then(res => res || fetch('data/exercises.json')).then(res => {
+  if (!res.ok) throw new Error(`exercises.json: HTTP ${res.status}`);
+  return res.json();
+}).then(list => { S.base = list; indexExercises(); });
+libraryReady.catch(() => {}); // reported by enterApp
 async function boot() {
-  try {
-    const res = await fetch('data/exercises.json');
-    if (!res.ok) throw new Error(`exercises.json: HTTP ${res.status}`);
-    S.base = await res.json();
-    indexExercises();
-  } catch (err) {
-    console.error(err);
-    view.innerHTML = `<div class="empty" style="padding-top:30vh">Couldn't load the exercise library.<br>Open the app once with an internet connection so it can save itself for offline use.
-      <br><br><button class="btn" data-action="reload">Try again</button></div>`;
-    return;
-  }
-  registerSW();
+  // Registered after the library so the first visit doesn't download it twice at once.
+  libraryReady.catch(() => {}).then(registerSW);
   S.auth = await metaGet('auth');
   if (S.auth) return S.auth.mustChange ? showPasswordScreen() : enterApp(); // works offline
   // Not signed in on this phone yet: the server may still recognise the cookie.

@@ -30,11 +30,12 @@ Cloudflare D1, with a full copy on the phone so it keeps working at the gym with
 ```
 public/                     the website (Pages "build output directory")
   index.html                app shell
+  boot.js                   runs before first paint: saved theme, desktop-site zoom, starts loading exercises.json
   app.js                    the whole app: router, IndexedDB + outbox, sync, views, charts, timer
   styles.css                mobile-first styles, light + dark tokens
   sw.js                     service worker: cache-first shell, images cached as viewed; /api is never cached
   manifest.json             PWA manifest (standalone, portrait, maskable icon, shortcuts, screenshots)
-  _headers                  Cloudflare Pages headers
+  _headers                  Cloudflare Pages headers, including the Content-Security-Policy
   data/exercises.json       free-exercise-db, minified (see data/SOURCE.md)
   img/exercises/<id>/       0.webp (start), 1.webp (end), t.webp (thumbnail)
   icons/                    app icons + install-dialog screenshots
@@ -44,6 +45,7 @@ functions/api/              Pages Functions (the API), run by Cloudflare at /api
   _util.js                  password hashing (PBKDF2-SHA256), sessions, cookies, rate limits
   auth/                     me · login · logout · setup (first admin) · password
   sync.js                   one round trip: upload queued changes, download newer ones
+  admin/_middleware.js      admins only, for every admin route however its URL is spelled
   admin/users/              list/create people · change/turn off/delete one person
 tools/                      scripts that generated public/data, public/img and public/icons
 ```
@@ -51,9 +53,17 @@ tools/                      scripts that generated public/data, public/img and p
 ## How accounts and sync work
 
 - **Sign-in:** passwords are hashed with PBKDF2-SHA256 (100,000 iterations, random salt).
-  The session lives in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie for 180 days, renewed
-  while you use the app. Requests from other sites are refused. After 8 wrong passwords,
-  sign-in pauses for 15 minutes.
+  The session lives in a `__Host-` cookie (`HttpOnly`, `Secure`, `SameSite=Lax`, so no other
+  subdomain can set or read it) for 180 days, renewed while you use the app. Requests from
+  other sites are refused. After 8 wrong passwords, sign-in pauses for 15 minutes; the same
+  limit applies to the current password when changing it.
+- **Admin rules:** Cloudflare matches routes without regard to letter case, so the admin check
+  lives in `functions/api/admin/_middleware.js`, which runs for every admin route whatever the
+  URL looks like. Keep any new admin-only route inside that folder.
+- **Browser security:** `public/_headers` sends a Content-Security-Policy that allows only this
+  site's own script files, no inline scripts, and no framing. If you ever add an inline
+  `<script>` or load something from another site, it will be blocked until you update that
+  policy. Backup files are checked field by field before they are imported.
 - **People:** someone you add gets a temporary password and must choose their own the first
   time they sign in. Turning an account off or resetting its password signs that person out
   everywhere.

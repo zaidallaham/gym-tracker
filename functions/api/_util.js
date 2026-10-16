@@ -1,6 +1,9 @@
 // Shared helpers for the API. Files starting with "_" are imported, not routed.
 
-export const COOKIE = 'gym_session';
+// __Host- cookies can only be set by this exact host over HTTPS, so another subdomain can't
+// plant a session here. LEGACY_COOKIE is the old name, still accepted and swapped on next use.
+export const COOKIE = '__Host-gym_session';
+export const LEGACY_COOKIE = 'gym_session';
 export const SESSION_DAYS = 180;
 export const DAY_MS = 864e5;
 // PBKDF2-SHA256. 100,000 is the most iterations Cloudflare Workers allows.
@@ -20,15 +23,34 @@ export class HttpError extends Error {
 export function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers },
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+      ...headers,
+    },
   });
 }
 
 export const fail = (error, status = 400, extra = {}) => json({ error, ...extra }, status);
 
+/** Parse a JSON body, reading at most maxBytes so an oversized upload is refused early. */
 export async function readJson(request, maxBytes = 100000) {
-  const text = await request.text();
-  if (text.length > maxBytes) throw new HttpError(413, 'Request too large');
+  if (Number(request.headers.get('Content-Length')) > maxBytes) throw new HttpError(413, 'Request too large');
+  const chunks = [];
+  let size = 0;
+  if (request.body) {
+    const reader = request.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) { await reader.cancel(); throw new HttpError(413, 'Request too large'); }
+      chunks.push(value);
+    }
+  }
+  const text = await new Blob(chunks).text();
   if (!text) return {};
   try {
     const body = JSON.parse(text);
@@ -84,9 +106,14 @@ export function readCookie(request, name = COOKIE) {
   const m = (request.headers.get('Cookie') || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
   return m ? m[1] : null;
 }
+/** The session token, preferring the __Host- cookie; `legacy` says the old cookie is still around. */
+export function readSession(request) {
+  const current = readCookie(request, COOKIE), old = readCookie(request, LEGACY_COOKIE);
+  return { token: current || old, fromLegacy: !current && !!old, legacy: !!old };
+}
 
 export const sessionCookie = token => `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`;
-export const clearCookie = () => `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+export const clearCookie = (name = COOKIE) => `${name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 
 export async function createSession(db, userId, request) {
   const token = randomHex(32), now = Date.now();

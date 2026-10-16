@@ -6,7 +6,7 @@ import {
 
 export async function onRequestPost({ request, env }) {
   const body = await readJson(request, 10000);
-  const username = String(body.username || '').trim().toLowerCase();
+  const username = String(body.username || '').trim().toLowerCase().slice(0, 64);
   const password = String(body.password || '');
   const keys = [`ip:${clientIp(request)}`, `user:${username}`];
 

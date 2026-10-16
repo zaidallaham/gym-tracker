@@ -3,12 +3,13 @@
      so phones download the new shell; the app then offers "Update".
    - Exercise images: cache-first in their own cache, saved the first time they're viewed
      (or all at once from Settings). That cache is kept across versions. */
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.2.0';
 const SHELL = `gym-shell-${VERSION}`;
 const IMAGES = 'gym-img-v1'; // also used by app.js; bump only if the image files change
 
 const SHELL_FILES = [
   './',
+  './boot.js',
   './app.js',
   './styles.css',
   './manifest.json',
@@ -20,9 +21,11 @@ const SHELL_FILES = [
   './icons/favicon-32.png',
 ];
 
+// 'no-cache' revalidates each file with the server: files that didn't change since the last
+// version come back as a tiny 304 instead of being downloaded again (exercises.json is 800 KB).
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(SHELL).then(cache => cache.addAll(SHELL_FILES.map(u => new Request(u, { cache: 'reload' })))),
+    caches.open(SHELL).then(cache => cache.addAll(SHELL_FILES.map(u => new Request(u, { cache: 'no-cache' })))),
   );
 });
 
