@@ -15,10 +15,12 @@
   Cache-Control: public, max-age=2592000
 
 # Content-Security-Policy: only this site's own scripts run (no inline or injected ones), the
-# page talks only to this site, and nobody can show it inside a frame. Inline style attributes
-# are allowed because the views use them; custom-exercise photos are data: URLs.
+# page talks only to this site, and nobody can show it inside a frame. The one exception is
+# Cloudflare Web Analytics, which Cloudflare adds to the page: its script and where it reports.
+# Inline style attributes are allowed because the views use them; custom-exercise photos are
+# data: URLs.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://cloudflareinsights.com; font-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer

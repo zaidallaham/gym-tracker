@@ -2136,7 +2136,7 @@ route(/^\/about$/, () => {
   view.innerHTML = topbar('About', { back: '#/settings' }) + `
     <section class="card about"><div class="row"><img src="icons/icon-192.png" width="56" height="56" alt="" style="border-radius:14px">
       <div><h2>Gym Tracker</h2><div class="small muted" id="ver">Version …</div></div></div>
-      <p style="margin-top:14px">Your workouts are saved on this phone first, so the app works without signal, and synced to your private account on Cloudflare (D1) whenever you're online. Only people the owner adds can sign in, and nobody else can see your log. There is no tracking or advertising.</p></section>
+      <p style="margin-top:14px">Your workouts are saved on this phone first, so the app works without signal, and synced to your private account on Cloudflare (D1) whenever you're online. Only people the owner adds can sign in, and nobody else can see your log. There is no advertising. Cloudflare Web Analytics counts page visits without cookies; your workouts are never part of it.</p></section>
     <section class="card about"><h2>Exercise library</h2>
       <p style="margin-top:8px">The ${fmtNum(S.base.length)} exercises, their start and end photos, instructions and muscle data come from
         <a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener">free-exercise-db</a> by yuhonas, which builds on
