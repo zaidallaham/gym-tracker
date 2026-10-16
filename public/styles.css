@@ -229,6 +229,8 @@ body.resting #view { padding-bottom: calc(var(--nav-h) + var(--safe-b) + 96px); 
   content: ""; position: absolute; top: 6px; width: 56px; height: 32px; border-radius: 16px;
   background: var(--accent-soft); z-index: -1;
 }
+.tabbar a svg { transition: transform .12s ease; }
+.tabbar a:active svg { transform: scale(.86); }
 .tabbar a .live-dot {
   position: absolute; top: 9px; left: calc(50% + 9px);
   width: 9px; height: 9px; border-radius: 50%; background: var(--good); border: 2px solid var(--surface);
@@ -790,6 +792,27 @@ body.resting .toast-wrap { bottom: calc(var(--nav-h) + var(--safe-b) + 92px); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+
+/* ---------- page transitions (render() in app.js; View Transitions API) ----------
+   Kept short so pages never feel slower: the new page fades in over the old one (between
+   tabs) or slides in a little (into a page / back out of it). The old page stays opaque
+   underneath and the blend is normal, so nothing flashes through mid-way. The tab bar, rest
+   timer and toasts are their own layers, so they stay put. Taps go straight through. */
+::view-transition { pointer-events: none; }
+::view-transition-old(root), ::view-transition-new(root) { mix-blend-mode: normal; }
+::view-transition-old(root) { animation: none; }
+::view-transition-new(root) { animation: vt-fade-in 180ms cubic-bezier(.2, .8, .2, 1) both; }
+:root[data-nav="forward"]::view-transition-new(root) { animation-name: vt-from-right; }
+:root[data-nav="back"]::view-transition-new(root) { animation-name: vt-from-left; }
+@keyframes vt-fade-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes vt-from-right { from { opacity: 0; transform: translateX(28px); } }
+@keyframes vt-from-left { from { opacity: 0; transform: translateX(-28px); } }
+.tabbar { view-transition-name: tabbar; }
+.restbar { view-transition-name: restbar; }
+.toast-wrap { view-transition-name: toast; }
+::view-transition-group(tabbar), ::view-transition-group(restbar), ::view-transition-group(toast) { animation: none; }
+::view-transition-old(tabbar), ::view-transition-old(restbar), ::view-transition-old(toast) { display: none; }
+::view-transition-new(tabbar), ::view-transition-new(restbar), ::view-transition-new(toast) { animation: none; }
 
 /* ---------- accounts ---------- */
 body.auth-mode .tabbar, body.auth-mode .restbar { display: none !important; }

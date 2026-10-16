@@ -453,8 +453,7 @@ function renderRoute() {
     if (m) { fn(q, ...m.slice(1).map(decodeURIComponent)); matched = true; break; }
   }
   if (!matched) notFound();
-  const tab = /^\/(library|ex|custom)/.test(path) ? 'library' : /^\/progress/.test(path) ? 'progress'
-    : /^\/(history|session)/.test(path) ? 'history' : /^\/(settings|about|admin)/.test(path) ? 'more' : 'train';
+  const tab = tabOf(path);
   for (const a of $$('.tabbar a')) {
     a.classList.toggle('on', a.dataset.tab === tab);
     a.toggleAttribute('aria-current', a.dataset.tab === tab);
@@ -465,18 +464,35 @@ function renderRoute() {
   if (S.active) trainTab.insertAdjacentHTML('beforeend', '<span class="live-dot" aria-label="Workout in progress"></span>');
   paintSync();
 }
+const tabOf = path => (/^\/(library|ex|custom)/.test(path) ? 'library' : /^\/progress/.test(path) ? 'progress'
+  : /^\/(history|session)/.test(path) ? 'history' : /^\/(settings|about|admin)/.test(path) ? 'more' : 'train');
 function render() {
   if (!S.auth || S.locked) return;
   const hash = location.hash || '#/';
   let back = false;
+  const prev = curHash;
   if (curHash !== null) scrollMem[curHash] = scrollY;
   if (replacing) { navStack[navStack.length - 1] = hash; replacing = false; }
   else if (navStack.length > 1 && navStack[navStack.length - 2] === hash) { navStack.pop(); back = true; }
   else if (navStack[navStack.length - 1] !== hash) navStack.push(hash);
   curHash = hash;
-  renderRoute();
-  scrollTo(0, back ? (scrollMem[hash] || 0) : 0);
+  const swap = () => {
+    try { renderRoute(); } catch (err) { console.error(err); }
+    scrollTo(0, back ? (scrollMem[hash] || 0) : 0);
+  };
+  // A short fade between tabs and a slide into / back out of a page (styles.css, "page
+  // transitions"). Skipped where unsupported, for reduced motion, and for the first screen.
+  if (!document.startViewTransition || reduceMotion || prev === null || document.hidden) return swap();
+  const root = document.documentElement;
+  root.dataset.nav = tabOf(parseHash().path) !== tabOf(prev.slice(1).split('?')[0] || '/') ? 'tab' : back ? 'back' : 'forward';
+  let swapped = false;
+  const vt = navTransition = document.startViewTransition(() => { swapped = true; swap(); });
+  vt.finished.then(() => { if (navTransition === vt) delete root.dataset.nav; });
+  // The transition starts on the next frame. If the browser isn't drawing frames just then,
+  // show the new page anyway instead of waiting (skipping still runs the swap).
+  setTimeout(() => { if (!swapped) vt.skipTransition(); }, 300);
 }
+let navTransition = null;
 /** Re-render the current route in place (after data changed), keeping the scroll position. */
 function rerender() { const y = scrollY; renderRoute(); scrollTo(0, y); }
 /** A callback that re-renders only if the same view is still showing (sheets also close on route change). */
@@ -798,10 +814,10 @@ function lineChart(host, { series, height = 190, yFmt = v => fmtNum(v), tip, hov
   cv.addEventListener('pointerdown', pick);
   cv.addEventListener('pointermove', ev => { if (ev.pointerType === 'mouse' || ev.buttons) pick(ev); });
   cv.addEventListener('pointerleave', ev => { if (ev.pointerType === 'mouse') { hover = -1; draw(); } });
+  // The observer's first callback (right after layout) does the initial draw, so it happens once.
   const ro = new ResizeObserver(draw);
   ro.observe(host);
   onLeave(() => ro.disconnect());
-  draw();
 }
 function spark(vals) {
   if (vals.length < 2) return '<svg class="spark" aria-hidden="true"></svg>';
@@ -898,9 +914,11 @@ route(/^\/$/, () => {
   const now = Date.now(), fin = finished(), next = nextTemplateId(), wk = startOfWeek(now);
   const lastBy = {};
   for (const s of fin) lastBy[s.templateId] = s;
+  const byDay = new Map();
+  for (const s of [...fin.filter(x => x.start >= wk), ...(S.active ? [S.active] : [])]) if (!byDay.has(ymd(s.start))) byDay.set(ymd(s.start), s);
   const strip = Array.from({ length: 7 }, (_, i) => {
     const d = addDays(wk, i), key = ymd(d);
-    const hit = [...fin, ...(S.active ? [S.active] : [])].find(s => ymd(s.start) === key);
+    const hit = byDay.get(key);
     const circle = hit
       ? `<b style="background:${dayBg(hit.color)};color:${dayInk(hit.color)}" title="${esc(hit.name)}">${tplIndex(hit.templateId) + 1 || '•'}</b>`
       : `<b>${new Date(d).getDate()}</b>`;
@@ -1633,9 +1651,9 @@ const sessRow = s => {
     ${prs ? `<span class="tag accent" aria-label="${plural(prs, 'record')}">${icon('trophy')}${prs}</span>` : ''}${icon('next')}</a></li>`;
 };
 route(/^\/history$/, () => {
-  const fin = finished(), byDay = new Map();
-  for (const s of fin) { const k = ymd(s.start); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(s); }
   const m0 = hist.month, d0 = new Date(m0), y = d0.getFullYear(), mo = d0.getMonth();
+  const monthSessions = finished().filter(s => s.start >= m0 && s.start < addMonths(m0, 1)), byDay = new Map();
+  for (const s of monthSessions) { const k = ymd(s.start); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(s); }
   const days = new Date(y, mo + 1, 0).getDate(), offset = (d0.getDay() + 6) % 7, today = ymd(Date.now());
   let cells = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map(d => `<div class="dow" aria-hidden="true">${d}</div>`).join('');
   cells += '<div class="d out"></div>'.repeat(offset);
@@ -1645,7 +1663,6 @@ route(/^\/history$/, () => {
     cells += `<button class="d ${k === today ? 'today' : ''} ${hist.sel === k ? 'sel' : ''}" data-action="cal" data-k="${k}" aria-label="${esc(label)}">${d}
       ${ss.length ? `<span class="dots">${ss.slice(0, 2).map(s => `<b style="background:${dayBg(s.color)};color:${dayInk(s.color)}">${tplIndex(s.templateId) + 1 || '•'}</b>`).join('')}</span>` : ''}</button>`;
   }
-  const monthSessions = fin.filter(s => s.start >= m0 && s.start < addMonths(m0, 1));
   const list = hist.sel ? byDay.get(hist.sel) || [] : monthSessions;
   const vol = monthSessions.reduce((a, s) => a + sessionTotals(s).vol, 0);
   view.innerHTML = topbar('History') + `

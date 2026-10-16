@@ -3,7 +3,7 @@
      so phones download the new shell; the app then offers "Update".
    - Exercise images: cache-first in their own cache, saved the first time they're viewed
      (or all at once from Settings). That cache is kept across versions. */
-const VERSION = 'v1.2.1';
+const VERSION = 'v1.2.2';
 const SHELL = `gym-shell-${VERSION}`;
 const IMAGES = 'gym-img-v1'; // also used by app.js; bump only if the image files change
 
