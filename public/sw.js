@@ -3,7 +3,7 @@
      so phones download the new shell; the app then offers "Update".
    - Exercise images: cache-first in their own cache, saved the first time they're viewed
      (or all at once from Settings). That cache is kept across versions. */
-const VERSION = 'v1.2.2';
+const VERSION = 'v1.2.3';
 const SHELL = `gym-shell-${VERSION}`;
 const IMAGES = 'gym-img-v1'; // also used by app.js; bump only if the image files change
 
@@ -65,12 +65,12 @@ self.addEventListener('fetch', event => {
 });
 
 async function imageFirst(req, event) {
-  const cache = await caches.open(IMAGES);
-  const hit = await cache.match(req);
+  // One lookup for the common case (photo already saved); the cache is opened only to save one.
+  const hit = await caches.match(req, { cacheName: IMAGES });
   if (hit) return hit;
   try {
     const res = await fetch(req);
-    if (res.ok) event.waitUntil(cache.put(req, res.clone()));
+    if (res.ok) { const copy = res.clone(); event.waitUntil(caches.open(IMAGES).then(cache => cache.put(req, copy))); }
     return res;
   } catch {
     return new Response('', { status: 504, statusText: 'Offline and not cached' });

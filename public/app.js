@@ -157,6 +157,7 @@ const ICONS = {
   logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/>',
   user: '<path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 20a7.5 7.5 0 0 1 15 0"/>',
   cloud: '<path d="M7 18.5a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.5 4.5 0 0 1-.5 9z"/>',
+  flame: '<path d="M12 3c.6 3.4 4.8 5.6 4.8 10.3a4.8 4.8 0 0 1-9.6 0c0-2.6 1.4-4.2 2.6-5.3.2 1.6 1 2.7 2.1 3.2-.2-3.1-.6-5.6.1-8.2z" fill="currentColor" stroke="none"/>',
 };
 const icon = (n, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
 
@@ -420,6 +421,8 @@ const onLeave = fn => leaveFns.push(fn);
 const ROUTES = [];
 const route = (re, fn) => ROUTES.push([re, fn]);
 let navStack = [], scrollMem = {}, curHash = null, replacing = false;
+// True while a view renders for a back navigation or an in-place refresh: keep its list length etc.
+let navBack = false;
 // Listeners a view adds to long-lived nodes (view, document) go through on() and die with the view.
 let viewAC = new AbortController(), renderToken = 0;
 const on = (el, type, fn, opts) => el?.addEventListener(type, fn, { ...opts, signal: viewAC.signal });
@@ -477,6 +480,7 @@ function render() {
   else if (navStack[navStack.length - 1] !== hash) navStack.push(hash);
   curHash = hash;
   const swap = () => {
+    navBack = back;
     try { renderRoute(); } catch (err) { console.error(err); }
     scrollTo(0, back ? (scrollMem[hash] || 0) : 0);
   };
@@ -487,6 +491,7 @@ function render() {
   root.dataset.nav = tabOf(parseHash().path) !== tabOf(prev.slice(1).split('?')[0] || '/') ? 'tab' : back ? 'back' : 'forward';
   let swapped = false;
   const vt = navTransition = document.startViewTransition(() => { swapped = true; swap(); });
+  vt.ready.catch(() => {}); // rejects when skipped (a quicker tap, or no frame); that's expected
   vt.finished.then(() => { if (navTransition === vt) delete root.dataset.nav; });
   // The transition starts on the next frame. If the browser isn't drawing frames just then,
   // show the new page anyway instead of waiting (skipping still runs the swap).
@@ -494,7 +499,7 @@ function render() {
 }
 let navTransition = null;
 /** Re-render the current route in place (after data changed), keeping the scroll position. */
-function rerender() { const y = scrollY; renderRoute(); scrollTo(0, y); }
+function rerender() { const y = scrollY; navBack = true; renderRoute(); scrollTo(0, y); }
 /** A callback that re-renders only if the same view is still showing (sheets also close on route change). */
 const refreshIfSame = (fn = rerender) => { const t = renderToken; return () => { if (t === renderToken) fn(); }; };
 function notFound() {
@@ -709,6 +714,14 @@ const heatLegend = () => `<div class="heat-legend"><span>Sets / week</span>
   <i style="background:var(--heat-2)"></i>4–7 <i style="background:var(--heat-3)"></i>8–11 <i style="background:var(--heat-4)"></i>12+</div>`;
 
 // ---- charts (canvas, no library). Thin 2px lines, ringed markers, hairline grid, crosshair + tooltip.
+/** A CSS colour with an alpha, via the canvas (which turns any colour it accepts into #rrggbb). */
+function alpha(g, color, a) {
+  g.fillStyle = color;
+  const hex = g.fillStyle;
+  if (hex[0] !== '#') return hex;
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
 function niceTicks(min, max, count) {
   const raw = (max - min) / Math.max(1, count - 1);
   const mag = 10 ** Math.floor(Math.log10(raw));
@@ -785,11 +798,15 @@ function lineChart(host, { series, height = 190, yFmt = v => fmtNum(v), tip, hov
         g.beginPath(); g.moveTo(P[0][0], Y(lo));
         P.forEach(([x, y]) => g.lineTo(x, y));
         g.lineTo(P[P.length - 1][0], Y(lo)); g.closePath();
-        g.globalAlpha = 0.1; g.fillStyle = c; g.fill(); g.globalAlpha = 1;
+        const fade = g.createLinearGradient(0, T, 0, height - B);
+        fade.addColorStop(0, alpha(g, c, 0.28)); fade.addColorStop(1, alpha(g, c, 0));
+        g.fillStyle = fade; g.fill();
       }
       g.beginPath();
       P.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-      g.strokeStyle = c; g.lineWidth = 2; g.lineJoin = 'round'; g.lineCap = 'round'; g.stroke();
+      g.shadowColor = alpha(g, c, 0.45); g.shadowBlur = 6; g.shadowOffsetY = 2;
+      g.strokeStyle = c; g.lineWidth = 2.5; g.lineJoin = 'round'; g.lineCap = 'round'; g.stroke();
+      g.shadowColor = 'transparent';
       P.forEach(([x, y], i) => { if ((s.markers !== 'last' && P.length <= 24) || i === P.length - 1) ring(x, y, 4, c); });
     }
     if (hover >= 0 && target[hover]) {
@@ -924,7 +941,15 @@ route(/^\/$/, () => {
       : `<b>${new Date(d).getDate()}</b>`;
     return `<div class="${key === ymd(now) ? 'today' : ''} ${hit ? 'hit' : ''}">${fmtDate(d, { weekday: 'narrow' })}${circle}</div>`;
   }).join('');
-  const weekCount = fin.filter(s => s.start >= wk).length;
+  const weekCount = fin.filter(s => s.start >= wk).length, goal = Math.max(1, S.templates.length);
+  // Weeks in a row with at least one workout; this week counts once it has one.
+  const weeks = new Set(fin.map(s => startOfWeek(s.start)));
+  let streak = 0;
+  for (let w = weeks.has(wk) ? wk : addDays(wk, -7); weeks.has(w); w = addDays(w, -7)) streak++;
+  const R = 17, C = 2 * Math.PI * R, filled = Math.min(1, weekCount / goal);
+  const ring = `<div class="ring ${weekCount >= goal ? 'full' : ''}" role="img" aria-label="${weekCount} of ${goal} workouts this week">
+    <svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="${R}"/><circle class="val" cx="22" cy="22" r="${R}"
+      stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${(C * (1 - filled)).toFixed(1)}"/></svg><b>${weekCount}</b></div>`;
 
   let banner = '';
   const lastText = t => (lastBy[t.id] ? `last done ${relDay(lastBy[t.id].start)}` : 'not done yet');
@@ -935,11 +960,21 @@ route(/^\/$/, () => {
       <span>Started ${fmtTime(S.active.start)} · ${plural(t.sets, 'set')} done</span></div>${icon('next')}</a>`;
   } else if (up?.items.length) {
     // The next day in the rotation, one tap away at the top of the screen.
-    const i = tplIndex(up.id);
+    const i = tplIndex(up.id), pri = new Set(), sec = new Set();
+    for (const it of up.items) {
+      const e = S.exMap.get(it.exId);
+      e?.primaryMuscles.forEach(m => pri.add(m));
+      e?.secondaryMuscles.forEach(m => sec.add(m));
+    }
+    const focus = [...new Set([...pri].map(m => MUSCLE_LABEL[m] || cap(m)))].slice(0, 4).join(' · ');
+    const map = muscleMap(m => (pri.has(m) ? 'var(--day)' : sec.has(m) ? 'var(--day-soft)' : ''), `Muscles this day trains: ${focus}`);
     banner = `<section class="card next-card" style="--day:${dayBg(up.color)}">
-      <div class="next-top">${dotN(up.color, i + 1)}<span class="eyebrow">Up next · Day ${i + 1}</span></div>
-      <h2>${esc(up.name)}</h2>
-      <div class="small muted">${plural(up.items.length, 'exercise')} · ${lastText(up)}</div>
+      <div class="next-body"><div class="next-text">
+        <div class="next-top">${dotN(up.color, i + 1)}<span class="eyebrow">Up next · Day ${i + 1}</span></div>
+        <h2>${esc(up.name)}</h2>
+        <div class="small muted">${plural(up.items.length, 'exercise')} · ${lastText(up)}</div>
+        ${focus ? `<div class="next-focus">${esc(focus)}</div>` : ''}</div>
+        <div class="next-map">${map}</div></div>
       <button class="btn primary lg block" data-action="start" data-id="${esc(up.id)}">${icon('play')}Start ${esc(up.name)}</button></section>`;
   }
   const install = installEvt && !S.settings.installHidden ? `<section class="card"><div class="row">${icon('phone')}<div style="flex:1"><b>Install Gym Tracker</b>
@@ -964,11 +999,15 @@ route(/^\/$/, () => {
       </div></article>`;
   }).join('');
 
+  const hr = new Date(now).getHours(), first = (S.auth?.name || '').trim().split(/\s+/)[0];
+  const hello = `${hr >= 5 && hr < 12 ? 'Good morning' : hr >= 12 && hr < 18 ? 'Good afternoon' : 'Good evening'}${first ? `, ${first}` : ''}`;
   view.innerHTML = topbar('Train', {
-    sub: fmtDate(now, { weekday: 'long', month: 'long', day: 'numeric' }),
+    sub: `${hello} · ${fmtDate(now, { weekday: 'short', month: 'short', day: 'numeric' })}`,
     right: `<button class="icon-btn" id="sync-ind" data-action="go-settings" hidden>${icon('cloudOff')}</button>`,
   }) + `${banner}
-    <section class="card"><div class="row"><b style="flex:1">This week</b><span class="small muted">${plural(weekCount, 'workout')}</span></div>
+    <section class="card week-card"><div class="row">${ring}<div style="flex:1;min-width:0"><b>This week</b>
+        <div class="small muted">${weekCount} of ${goal} workouts</div></div>
+        ${streak > 1 ? `<span class="tag accent streak" aria-label="${streak} weeks in a row">${icon('flame')}${streak} weeks</span>` : ''}</div>
       <div class="week-strip">${strip}</div></section>
     ${install}
     <div class="section-label">Your 4-day split</div>
@@ -985,7 +1024,10 @@ route(/^\/start\/([\w-]+)$/, (q, id) => {
 });
 
 // ---------------------------------------------------------------- Exercise library
-const lib = { q: '', muscle: '', equip: '', cat: '', shown: 40 };
+// The list starts with a screenful or two and grows as you scroll. `shown` is kept only when
+// coming back to the list (so the scroll position can be restored), not on a fresh visit.
+const LIB_FIRST = 24, LIB_MORE = 40;
+const lib = { q: '', muscle: '', equip: '', cat: '', shown: LIB_FIRST };
 function parsePick(v) {
   if (!v) return null;
   const [kind, id] = v.split(':');
@@ -1063,6 +1105,7 @@ route(/^\/library$/, q => {
   const pick = parsePick(q.get('pick'));
   if (q.get('pick') && !pick) return replaceRoute('#/library');
   const cats = [['', 'All types'], ...CATEGORIES, ['custom', 'My exercises']];
+  if (!navBack) lib.shown = LIB_FIRST;
   view.innerHTML = topbar(pick ? 'Add exercises' : 'Exercises', {
     back: pick?.back,
     right: pick ? '<button class="btn sm primary" data-action="pick-done">Done</button>' : '',
@@ -1083,17 +1126,17 @@ route(/^\/library$/, q => {
   let results = [];
   const list = () => {
     results = libFilter();
-    lib.shown = Math.max(40, Math.min(lib.shown, results.length));
+    lib.shown = Math.max(LIB_FIRST, Math.min(lib.shown, results.length));
     $('#count').textContent = plural(results.length, 'exercise');
     ul.innerHTML = results.slice(0, lib.shown).map(e => libRow(e, pick)).join('') || '<li class="empty">No exercises match. Try fewer filters.</li>';
   };
-  const reset = () => { lib.shown = 40; list(); };
+  const reset = () => { lib.shown = LIB_FIRST; list(); };
   const io = new IntersectionObserver(es => {
     if (!es.some(x => x.isIntersecting) || lib.shown >= results.length) return;
-    const more = results.slice(lib.shown, lib.shown + 40);
+    const more = results.slice(lib.shown, lib.shown + LIB_MORE);
     lib.shown += more.length;
     ul.insertAdjacentHTML('beforeend', more.map(e => libRow(e, pick)).join(''));
-  }, { rootMargin: '800px' });
+  }, { rootMargin: '600px' });
   io.observe($('#more'));
   onLeave(() => io.disconnect());
   list();
@@ -1470,6 +1513,7 @@ function sessionEditor(s, live) {
     changed();
     repaint(ei);
     if (!x.done) return;
+    $(`.ex-card[data-ei="${ei}"] .set-row[data-si="${si}"]`, view)?.classList.add('pop');
     if (S.settings.vibrate) navigator.vibrate?.(25);
     startRest(restFor(e.exId), exName(e.exId));
     const pr = prFlags(ctx, e).get(si);
@@ -1621,7 +1665,48 @@ route(/^\/summary\/([\w-]+)$/, (q, id) => {
     ${statTiles(sessionTotals(s))}${prCard(prs)}${exerciseList(s)}
     <div class="btn-row" style="margin-top:16px"><a class="btn lg" href="#/session/${esc(s.id)}">View session</a>
       <button class="btn lg primary" data-action="replace" data-to="#/">Done</button></div>`;
+  // Celebrate right after finishing (not when coming back to this screen later).
+  if (Date.now() - s.end < 2 * 6e4) confetti(prs.length > 0);
 });
+
+/** A short confetti burst over the page; more pieces when records were set. */
+function confetti(big) {
+  if (reduceMotion) return;
+  const cv = document.createElement('canvas');
+  cv.className = 'confetti';
+  cv.setAttribute('aria-hidden', 'true');
+  document.body.append(cv);
+  onLeave(() => cv.remove());
+  const W = cv.clientWidth, H = cv.clientHeight, dpr = devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext('2d');
+  g.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement);
+  const colors = ['--accent', '--day-blue', '--day-magenta', '--day-yellow', '--good'].map(v => css.getPropertyValue(v).trim());
+  const bits = Array.from({ length: big ? 150 : 80 }, () => ({
+    x: W / 2 + (Math.random() - 0.5) * 80, y: H * 0.22,
+    vx: (Math.random() - 0.5) * 11, vy: -4 - Math.random() * 9,
+    a: Math.random() * Math.PI, va: (Math.random() - 0.5) * 0.35,
+    w: 5 + Math.random() * 5, h: 9 + Math.random() * 7, c: colors[(Math.random() * colors.length) | 0],
+  }));
+  const t0 = performance.now();
+  let last = t0;
+  const frame = t => {
+    if (!cv.isConnected) return;
+    const k = Math.min(3, (t - last) / 16.7), age = t - t0; // k: frames elapsed at 60 Hz, so speed is the same at 120 Hz
+    last = t;
+    g.clearRect(0, 0, W, H);
+    g.globalAlpha = 1 - clamp((age - 1200) / 600, 0, 1);
+    for (const b of bits) {
+      b.vy += 0.3 * k; b.vx *= 0.99 ** k; b.x += b.vx * k; b.y += b.vy * k; b.a += b.va * k;
+      g.save(); g.translate(b.x, b.y); g.rotate(b.a);
+      g.fillStyle = b.c; g.fillRect(-b.w / 2, -b.h / 2, b.w, b.h * Math.abs(Math.cos(b.a * 1.7)));
+      g.restore();
+    }
+    if (age < 1800) requestAnimationFrame(frame); else cv.remove();
+  };
+  requestAnimationFrame(frame);
+}
 route(/^\/session\/([\w-]+)$/, (q, id) => {
   const s = S.sessions.find(x => x.id === id);
   if (!s) return replaceRoute('#/history');
